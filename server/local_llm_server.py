@@ -271,7 +271,7 @@ async def generate_response(request: GenerateRequest) -> GenerateResponse:
         logger.error(f"Error generating response: {e}")
         raise HTTPException(status_code=500, detail=f"Generation failed: {str(e)}")
 
-def load_model(model_path: str, **kwargs) -> Llama:
+def load_model(model_path: str, capacity_bytes: int = None, **kwargs) -> Llama:
     """Load the GGUF model."""
     if not os.path.exists(model_path):
         raise FileNotFoundError(f"Model file not found: {model_path}")
@@ -280,14 +280,20 @@ def load_model(model_path: str, **kwargs) -> Llama:
     
     # Default parameters optimized for mobile/local inference
     default_params = {
-        "n_ctx": 4096,  # Increased context window for CUPRA system prompt
-        "n_batch": 128,  # Batch size
-        "n_threads": None,  # Auto-detect
-        "verbose": False,
-        "use_mmap": True,
-        "use_mlock": False,
-        "n_gpu_layers": 0  # CPU-only by default for compatibility
+        "n_ctx": 8192,                # context window
+        "n_batch": 1024,              # prompt eval batch size
+        "type_k": llama_cpp.GGML_TYPE_Q4_0,
+        "type_v": llama_cpp.GGML_TYPE_Q4_0,
     }
+    # default_params = {
+    #     "n_ctx": 4096,  # Increased context window for CUPRA system prompt
+    #     "n_batch": 128,  # Batch size
+    #     "n_threads": None,  # Auto-detect
+    #     "verbose": False,
+    #     "use_mmap": True,
+    #     "use_mlock": False,
+    #     "n_gpu_layers": 0  # CPU-only by default for compatibility
+    # }
     
     # Override with user-provided parameters
     params = {**default_params, **kwargs}
@@ -305,6 +311,17 @@ def load_model(model_path: str, **kwargs) -> Llama:
         model = Llama(model_path=model_path, **params)
         load_time = time.time() - start_time
         logger.info(f"Model loaded successfully in {load_time:.2f}s")
+
+        # add prompt caching
+        if not capacity_bytes:
+            capacity_bytes = 4 * 1024**3 # ~4 GiB
+
+        model.set_cache(LlamaRAMCache(capacity_bytes=capacity_bytes))  
+
+        # …or on-disk cache (persists across runs; slower than RAM but big)
+        # model.set_cache(LlamaDiskCache(capacity_bytes=20 * 1024**3))  # ~20 GiB
+        # (capacity_bytes is the knob you tune)
+
         return model
         
     except Exception as e:
@@ -314,10 +331,15 @@ def load_model(model_path: str, **kwargs) -> Llama:
 def main():
     parser = argparse.ArgumentParser(description="Local GGUF LLM Server")
     parser.add_argument(
-        "--model-path", 
+        "-m", "--model-path", 
         type=str, 
         required=True,
         help="Path to the GGUF model file"
+    )
+    parser.add_argument(
+        "-cb", "--capacity-bytes",
+        type=int,
+        help="Capacity of the cache in bytes (default: None)"
     )
     parser.add_argument(
         "--port", 
@@ -331,24 +353,24 @@ def main():
         default="0.0.0.0",
         help="Host to bind to (default: 0.0.0.0)"
     )
-    parser.add_argument(
-        "--n-ctx", 
-        type=int, 
-        default=2048,
-        help="Context window size (default: 2048)"
-    )
-    parser.add_argument(
-        "--n-threads", 
-        type=int, 
-        default=None,
-        help="Number of threads (default: auto-detect)"
-    )
-    parser.add_argument(
-        "--n-gpu-layers", 
-        type=int, 
-        default=0,
-        help="Number of GPU layers (default: 0 for CPU-only)"
-    )
+    # parser.add_argument(
+    #     "--n-ctx", 
+    #     type=int, 
+    #     default=2048,
+    #     help="Context window size (default: 2048)"
+    # )
+    # parser.add_argument(
+    #     "--n-threads", 
+    #     type=int, 
+    #     default=None,
+    #     help="Number of threads (default: auto-detect)"
+    # )
+    # parser.add_argument(
+    #     "--n-gpu-layers", 
+    #     type=int, 
+    #     default=0,
+    #     help="Number of GPU layers (default: 0 for CPU-only)"
+    # )
     parser.add_argument(
         "--verbose", 
         action="store_true",
@@ -366,9 +388,7 @@ def main():
     try:
         llm_model = load_model(
             model_path=args.model_path,
-            n_ctx=args.n_ctx,
-            n_threads=args.n_threads,
-            n_gpu_layers=args.n_gpu_layers,
+            capacity_bytes=args.capacity_bytes,
             verbose=args.verbose
         )
         logger.info("Server ready to handle requests")
