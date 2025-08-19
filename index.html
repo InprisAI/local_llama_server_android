@@ -1,0 +1,1132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CUPRA Local Assistant</title>
+  <style>
+    html, body { height: 100%; overflow: hidden; }
+    :root {
+      --primary-color: #0f172a;
+      --secondary-color: #334155;
+      --text-color: #0f172a;
+      --bg-color: #f8fafc;
+      --card-bg: #ffffff;
+      --border-color: #e2e8f0;
+      --accent-color: #2563eb;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+      min-height: 100vh;
+      color: var(--text-color);
+      line-height: 1.6;
+    }
+
+    .main-container { min-height: 100vh; display: flex; flex-direction: column; }
+    .header-bar {
+      background: var(--primary-color);
+      border-bottom: 1px solid var(--secondary-color);
+      padding: 1rem 0; position: sticky; top: 0; z-index: 100;
+      display: none; /* Hide header for tablet-like full-screen stage */
+    }
+    .header-content { max-width: 1200px; margin: 0 auto; padding: 0 2rem; display: flex; align-items: center; justify-content: space-between; }
+    .logo { display: flex; align-items: center; gap: 0.75rem; }
+    .logo-text { font-size: 1.1rem; font-weight: 600; color: #fff; }
+    .status-chip { padding: 0.375rem 0.75rem; border-radius: 9999px; font-size: 0.875rem; font-weight: 500; border: 1px solid; }
+    .status-disconnected { background: #fef2f2; border-color: #fecaca; color: #dc2626; }
+    .status-connecting { background: #fefbeb; border-color: #fed7aa; color: #d97706; }
+    .status-connected { background: #f0fdf4; border-color: #bbf7d0; color: #16a34a; }
+
+    .content { flex: 1; max-width: 100%; margin: 0; padding: 0; width: 100%; }
+    .layout { display: none; }
+
+    .voice-panel, .chat-panel { background: var(--card-bg); border-radius: 12px; border: 1px solid var(--border-color); display: flex; flex-direction: column; }
+    .panel-header { padding: 1rem 1.25rem; border-bottom: 1px solid var(--border-color); display: flex; align-items: center; justify-content: space-between; }
+    .panel-title { font-size: 1.05rem; font-weight: 600; }
+
+    .avatar-area { display: none; }
+    .avatar-placeholder { background: #0b0b0b; border-radius: 10px; height: 260px; display: flex; align-items: center; justify-content: center; color: #cbd5e1; position: relative; overflow: hidden; }
+    .avatar-note { position: absolute; bottom: 10px; left: 12px; color: #94a3b8; font-size: 12px; }
+    .mood-badge { align-self: flex-start; background: #e0e7ff; color: #1e40af; border: 1px solid #c7d2fe; font-size: 12px; padding: 4px 8px; border-radius: 999px; }
+
+    .asset-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .asset-tile { background: #0b0b0b; border: 1px dashed #334155; border-radius: 8px; height: 90px; display: flex; align-items: center; justify-content: center; color: #64748b; font-size: 12px; overflow: hidden; }
+    .asset-tile img { max-width: 100%; max-height: 100%; object-fit: contain; }
+
+    /* In-car infotainment stage */
+    .stage { position: relative; width: 100vw; height: 100vh; min-height: 100vh; border-radius: 0; overflow: hidden; display: grid; place-items: center; margin: 0; }
+    .stage-bg { position: absolute; inset: 0; z-index: 0; background: linear-gradient(135deg, var(--primary-color), var(--secondary-color)); }
+    .mask-overlay { position: absolute; inset: 0; margin: auto; max-width: min(95vw, 1200px); max-height: 95vh; object-fit: contain; z-index: 1; pointer-events: none; }
+    .avatar-hero { position: absolute; inset: 0; margin: auto; max-width: min(95vw, 1200px); max-height: 95vh; object-fit: contain; z-index: 2; pointer-events: none; }
+
+    /* Connection flourish (runs on every connection) */
+    .stage::after {
+      content: "";
+      position: absolute;
+      inset: -10%;
+      background: linear-gradient(120deg, transparent 30%, rgba(255,255,255,0.15) 50%, transparent 70%);
+      transform: translateX(-120%);
+      opacity: 0;
+      pointer-events: none;
+    }
+    .stage.just-connected::after { opacity: 1; animation: stageSweep 1.2s ease-out 1 forwards; }
+    @keyframes stageSweep {
+      0% { transform: translateX(-120%); opacity: 0; }
+      20% { opacity: 1; }
+      100% { transform: translateX(120%); opacity: 0; }
+    }
+    .avatar-hero { transition: transform 250ms ease; }
+    .stage.just-connected .avatar-hero { animation: avatarPop 600ms ease-out 1; }
+    @keyframes avatarPop {
+      0%   { transform: scale(0.98); filter: brightness(0.95) saturate(0.9); }
+      60%  { transform: scale(1.03); filter: brightness(1.05) saturate(1.05); }
+      100% { transform: scale(1); filter: none; }
+    }
+    .status-chip.just-connected { animation: chipPop 900ms ease-out 1; }
+    @keyframes chipPop {
+      0%   { transform: scale(0.95); }
+      40%  { transform: scale(1.06); }
+      100% { transform: scale(1); }
+    }
+
+    /* Loading indicator */
+    .loading-overlay {
+      position: absolute;
+      top: 75%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(0, 0, 0, 0.8);
+      color: white;
+      padding: 1rem 2rem;
+      border-radius: 8px;
+      font-size: 1.1rem;
+      z-index: 10;
+      display: none;
+    }
+    .loading-overlay.show { display: block; }
+
+    .spinner {
+      display: inline-block;
+      width: 20px;
+      height: 20px;
+      border: 3px solid #f3f3f3;
+      border-top: 3px solid #3498db;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin-right: 10px;
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+
+    /* Touch interaction hint */
+    .interaction-hint {
+      position: absolute;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      color: rgba(255, 255, 255, 0.8);
+      font-size: 0.9rem;
+      text-align: center;
+      z-index: 5;
+      animation: fadeInOut 3s ease-in-out infinite;
+    }
+    @keyframes fadeInOut {
+      0%, 100% { opacity: 0.6; }
+      50% { opacity: 1; }
+    }
+
+    @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="main-container">
+    <div class="header-bar">
+      <div class="header-content">
+        <div class="logo">
+          <span class="logo-text">CUPRA Local Assistant</span>
+        </div>
+        <div class="status-chip status-disconnected" id="status">Ready</div>
+      </div>
+    </div>
+
+    <div class="content">
+      <!-- In-car infotainment stage (centered avatar over gradient + masks) -->
+      <section class="stage" id="infotainmentStage">
+        <div class="stage-bg"></div>
+        <img id="maskOverlay_abt1" class="mask-overlay" alt="Mask ABT 1" style="display:none;" />
+        <img id="maskOverlay_abt2" class="mask-overlay" alt="Mask ABT 2" style="display:none;" />
+        <img id="maskOverlay_kombi1" class="mask-overlay" alt="Mask KOMBI 1" style="display:none;" />
+        <img id="maskOverlay_kombi2" class="mask-overlay" alt="Mask KOMBI 2" style="display:none;" />
+        <img id="avatarImg" class="avatar-hero" alt="CUPRA Avatar" style="opacity: 0; transition: opacity 0.5s ease;" />
+        
+        <!-- Loading indicator -->
+        <div id="loadingOverlay" class="loading-overlay">
+          <div class="spinner"></div>
+          <span id="loadingText">Thinking...</span>
+        </div>
+        
+        <!-- Interaction hint -->
+        <div id="interactionHint" class="interaction-hint">
+          Tap to start conversation
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <script>
+    window.addEventListener('DOMContentLoaded', async () => {
+      console.log('[CUPRA Local] Initializing local assistant...');
+      
+      // Configuration
+      const CONFIG = {
+        localServerUrl: 'http://localhost:8080', // Local GGUF server
+        avatarBasePath: '/static/media_cupra/CUPRA_AVATAR',
+        masksBasePath: '/static/media_cupra/masks',
+        defaultMasks: {
+          abt1: 'NEW MASKS ABT/Core_L.png',
+          abt2: 'NEW MASKS ABT/Core_R.png'
+        }
+      };
+
+      // UI Elements
+      const statusChip = document.getElementById('status');
+      const stageEl = document.getElementById('infotainmentStage');
+      const avatarImg = document.getElementById('avatarImg');
+      const loadingOverlay = document.getElementById('loadingOverlay');
+      const loadingText = document.getElementById('loadingText');
+
+      // Chat History (session-only)
+      let chatHistory = [];
+      let isProcessing = false;
+      let currentState = 'Idle';
+      let continuousConversation = false;
+
+      // Avatar States
+      const AvatarState = {
+        Idle: 'Idle',
+        Listening: 'Listening',
+        Speaking: 'Speaking',
+        Thinking: 'Thinking',
+        Incoming_Recommendation: 'Incoming_Recommendation',
+        Pause: 'Pause'
+      };
+
+      // Avatar Animation System
+      class AvatarAnimator {
+        constructor(imgEl) {
+          this.imgEl = imgEl;
+          this.fps = 12;
+          this.msPerFrame = 1000 / this.fps;
+          this.cache = new Map();
+          this.currentSequence = [];
+          this.loop = true;
+          this.frameIndex = 0;
+          this.lastTick = 0;
+          this.currentState = AvatarState.Idle;
+          this.running = false;
+          this.postTransitionLoop = [];
+        }
+
+        buildFramePath(state, index) {
+          if (state === AvatarState.Pause) {
+            return `${CONFIG.avatarBasePath}/STATES/Pause/Pause.png`;
+          }
+          const name = `${state}_${String(index).padStart(2, '0')}.png`;
+          return `${CONFIG.avatarBasePath}/STATES/${state}/${name}`;
+        }
+
+        buildTransitionPath(from, to, index) {
+          const tokenMap = {
+            Idle: 'Idle',
+            Listening: 'Listening',
+            Speaking: 'Speaking',
+            Thinking: 'Thinking',
+            Pause: 'Pause',
+            Incoming_Recommendation: 'Incoming Recomendation',
+            Neutral: 'Neutral'
+          };
+          const fromToken = tokenMap[from] || from;
+          const toToken = tokenMap[to] || to;
+          const folder = `${fromToken}_${toToken}`;
+          const name = `${fromToken}_${toToken}_${String(index).padStart(2, '0')}.png`;
+          return `${CONFIG.avatarBasePath}/TRANSITIONS/${folder}/${name}`;
+        }
+
+        async preload(urls) {
+          await Promise.all(urls.map((u) => new Promise((resolve) => {
+            if (this.cache.has(u)) return resolve();
+            const im = new Image();
+            im.onload = () => resolve();
+            im.onerror = () => resolve();
+            im.src = u;
+            this.cache.set(u, im);
+          })));
+        }
+
+        async setState(target) {
+          if (target === this.currentState) return;
+          
+          let sequence = [];
+          const NEUTRAL = 'Neutral';
+          const framesPerState = 30;
+          const transitionFrames = 5;
+
+          // Pause state
+          if (target === AvatarState.Pause) {
+            sequence = [`${CONFIG.avatarBasePath}/STATES/Pause/Pause.png`];
+            this.loop = false;
+            await this.preload(sequence);
+            this.currentSequence = sequence;
+            this.frameIndex = 0;
+            this.currentState = target;
+            if (this.imgEl) {
+              this.imgEl.src = sequence[0];
+              this.imgEl.style.opacity = '1'; // Show avatar once loaded
+            }
+            return;
+          }
+
+          // Transitions
+          const from = this.currentState;
+          if (from && from !== AvatarState.Idle) {
+            const t1 = Array.from({ length: transitionFrames }, (_, i) => this.buildTransitionPath(from, NEUTRAL, i));
+            sequence = sequence.concat(t1);
+          }
+          if (target !== AvatarState.Idle) {
+            const t2 = Array.from({ length: transitionFrames }, (_, i) => this.buildTransitionPath(NEUTRAL, target, i));
+            sequence = sequence.concat(t2);
+          }
+
+          // Target loop frames
+          const loopFrames = Array.from({ length: framesPerState }, (_, i) => this.buildFramePath(target, i));
+          await this.preload([...sequence, ...loopFrames.slice(0, 3)]);
+          
+          this.postTransitionLoop = loopFrames;
+          this.currentSequence = sequence.length ? sequence : this.postTransitionLoop;
+          this.loop = true;
+          this.frameIndex = 0;
+          this.currentState = target;
+          
+          // Show avatar once first frame is ready
+          if (this.imgEl && (sequence.length > 0 || loopFrames.length > 0)) {
+            this.imgEl.style.opacity = '1';
+          }
+          
+          if (!this.running) this.start();
+        }
+
+        start() {
+          if (this.running) return;
+          this.running = true;
+          this.lastTick = performance.now();
+          requestAnimationFrame(this.tick.bind(this));
+        }
+
+        tick(ts) {
+          if (!this.running || !this.imgEl || this.currentSequence.length === 0) {
+            this.running = false; 
+            return;
+          }
+          if (ts - this.lastTick >= this.msPerFrame) {
+            this.lastTick = ts;
+            const url = this.currentSequence[this.frameIndex];
+            this.imgEl.src = url;
+            // Ensure avatar is visible when animation starts
+            if (this.imgEl.style.opacity !== '1') {
+              this.imgEl.style.opacity = '1';
+            }
+            this.frameIndex += 1;
+            if (this.frameIndex >= this.currentSequence.length) {
+              if (this.currentSequence === this.postTransitionLoop) {
+                this.frameIndex = 0;
+              } else if (this.postTransitionLoop && this.postTransitionLoop.length) {
+                this.currentSequence = this.postTransitionLoop;
+                this.loop = true;
+                this.frameIndex = 0;
+              } else if (this.loop) {
+                this.frameIndex = 0;
+              } else {
+                this.running = false;
+              }
+            }
+          }
+          if (this.running) requestAnimationFrame(this.tick.bind(this));
+        }
+      }
+
+      // Initialize avatar animator
+      const animator = new AvatarAnimator(avatarImg);
+      animator.setState(AvatarState.Idle).catch(() => {});
+
+      // Local LLM Client
+      class LocalLLMClient {
+        constructor(baseUrl) {
+          this.baseUrl = baseUrl;
+        }
+
+        async checkConnection() {
+          try {
+            const response = await fetch(`${this.baseUrl}/health`, {
+              method: 'GET',
+              timeout: 5000
+            });
+            return response.ok;
+          } catch (error) {
+            console.error('[Local LLM] Connection check failed:', error);
+            return false;
+          }
+        }
+
+        async generateResponse(message, history = []) {
+          try {
+            const response = await fetch(`${this.baseUrl}/generate`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                message: message,
+                history: history.slice(-3) // Keep last 3 messages for context
+                // Use server's optimized defaults: max_tokens=200, temperature=0.4, top_p=0.9
+              })
+            });
+
+            if (!response.ok) {
+              throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+
+            const data = await response.json();
+            return data.response || data.text || 'Sorry, I received an empty response.';
+          } catch (error) {
+            console.error('[Local LLM] Generation failed:', error);
+            throw error;
+          }
+        }
+      }
+
+      const llmClient = new LocalLLMClient(CONFIG.localServerUrl);
+
+      // TTS using Web Speech API
+      class SimpleTTS {
+        constructor() {
+          this.synth = window.speechSynthesis;
+          this.voice = null;
+          this.loadVoices();
+          
+          // Ensure voices are loaded (sometimes they load asynchronously)
+          if (this.synth.onvoiceschanged !== undefined) {
+            this.synth.onvoiceschanged = () => this.loadVoices();
+          }
+        }
+
+        loadVoices() {
+          const voices = this.synth.getVoices();
+          console.log('[TTS] Available voices:', voices.map(v => `${v.name} (${v.lang})`));
+          
+          // Prefer English voices in order of preference
+          const englishVoices = voices.filter(voice => 
+            voice.lang.startsWith('en-US') || 
+            voice.lang.startsWith('en-GB') || 
+            voice.lang.startsWith('en')
+          );
+          
+          // Try to find the best English voice
+          this.voice = 
+            englishVoices.find(v => v.lang === 'en-US' && v.name.includes('Female')) ||
+            englishVoices.find(v => v.lang === 'en-US' && v.name.includes('Male')) ||
+            englishVoices.find(v => v.lang === 'en-US') ||
+            englishVoices.find(v => v.lang === 'en-GB') ||
+            englishVoices.find(v => v.lang.startsWith('en')) ||
+            voices[0];
+            
+          if (this.voice) {
+            console.log('[TTS] Selected voice:', this.voice.name, '(' + this.voice.lang + ')');
+          }
+        }
+
+        speak(text) {
+          return new Promise((resolve) => {
+            if (!text.trim()) {
+              resolve();
+              return;
+            }
+
+            const utterance = new SpeechSynthesisUtterance(text);
+            
+            // Force English voice selection
+            if (this.voice) {
+              utterance.voice = this.voice;
+            }
+            utterance.lang = 'en-US'; // Explicitly set language
+            utterance.rate = 0.9;
+            utterance.pitch = 1.0;
+            utterance.volume = 0.8;
+
+            utterance.onend = resolve;
+            utterance.onerror = (error) => {
+              console.warn('[TTS] Error:', error);
+              resolve();
+            };
+
+            console.log('[TTS] Speaking:', text.substring(0, 50) + '...');
+            this.synth.speak(utterance);
+          });
+        }
+
+        stop() {
+          this.synth.cancel();
+        }
+      }
+
+      const tts = new SimpleTTS();
+
+      // Voice Recognition using Web Speech API
+      class SimpleSTT {
+        constructor() {
+          this.recognition = null;
+          this.isListening = false;
+          this.initRecognition();
+        }
+
+        initRecognition() {
+          if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+            console.warn('[STT] Speech recognition not supported');
+            return;
+          }
+
+          const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+          this.recognition = new SpeechRecognition();
+          this.recognition.continuous = false;
+          this.recognition.interimResults = false;
+          this.recognition.lang = 'en-US'; // Explicitly set to US English
+          this.recognition.maxAlternatives = 1;
+          
+          console.log('[STT] Initialized with language: en-US');
+        }
+
+        startListening() {
+          return new Promise((resolve, reject) => {
+            if (!this.recognition) {
+              reject(new Error('Speech recognition not available'));
+              return;
+            }
+
+            this.isListening = true;
+            
+            this.recognition.onresult = (event) => {
+              const result = event.results[0][0].transcript;
+              this.isListening = false;
+              resolve(result);
+            };
+
+            this.recognition.onerror = (event) => {
+              this.isListening = false;
+              reject(new Error(`Speech recognition error: ${event.error}`));
+            };
+
+            this.recognition.onend = () => {
+              this.isListening = false;
+            };
+
+            this.recognition.start();
+          });
+        }
+
+        stopListening() {
+          if (this.recognition && this.isListening) {
+            this.recognition.stop();
+            this.isListening = false;
+          }
+        }
+      }
+
+      const stt = new SimpleSTT();
+
+      // UI Theme Application Functions (adapted from original Cupra.html)
+      function stripBrackets(val) {
+        if (!val) return val;
+        const s = String(val).trim();
+        return (s.startsWith('[') && s.endsWith(']')) ? s.slice(1, -1).trim() : s;
+      }
+
+      function toCssColor(colorName) {
+        // Prefer simple color names first
+        const simpleColors = {
+          'Blue': 'rgb(0, 102, 204)',
+          'Light Blue': 'rgb(102, 178, 255)',
+          'Cyan': 'rgb(0, 188, 212)',
+          'Teal': 'rgb(0, 150, 136)',
+          'Green': 'rgb(0, 200, 83)',
+          'Lime': 'rgb(153, 204, 0)',
+          'Yellow': 'rgb(255, 215, 0)',
+          'Orange': 'rgb(255, 140, 0)',
+          'Red': 'rgb(220, 53, 69)',
+          'Pink': 'rgb(233, 30, 99)',
+          'Purple': 'rgb(156, 39, 176)',
+          'White': 'rgb(255, 255, 255)',
+          'Warm White': 'rgb(250, 245, 230)',
+          'Copper': 'rgb(184, 115, 51)',
+          'Gray': 'rgb(128, 128, 128)',
+          'Black': 'rgb(0, 0, 0)'
+        };
+
+        // Legacy CUPRA color map (fallbacks)
+        const legacyColors = {
+          'Ice White': 'rgb(143, 255, 84)',
+          'Tech Blue': 'rgb(0, 0, 255)',
+          'Sunset Orange': 'rgb(255, 68, 2)',
+          'Apple Green': 'rgb(18, 255, 14)',
+          'Purple': 'rgb(150, 0, 255)',
+          'Calm Yellow': 'rgb(245, 255, 5)',
+          'Clear Blue': 'rgb(27, 164, 174)',
+          'Red': 'rgb(255, 3, 1)',
+          'Copper': 'rgb(176, 76, 6)',
+          'Petrol': 'rgb(84, 255, 249)',
+          'White': 'rgb(194, 255, 49)',
+          'Warm White': 'rgb(250, 255, 27)',
+          'Deep Yellow': 'rgb(255, 141, 3)',
+          'Valentino': 'rgb(255, 9, 15)',
+          'Pale Rose': 'rgb(255, 106, 63)',
+          'Light Purple': 'rgb(255, 150, 243)',
+          'Eco Blue': 'rgb(23, 255, 68)',
+          'Drift': 'rgb(100, 255, 4)',
+          'Medium Green': 'rgb(45, 200, 25)',
+          'Foggy Green': 'rgb(93, 255, 50)'
+        };
+
+        // Common synonyms / variants the model may emit
+        const synonymColors = {
+          'dark blue': 'rgb(0, 0, 139)',      // CSS DarkBlue
+          'navy': 'rgb(0, 0, 128)',
+          'midnight blue': 'rgb(25, 25, 112)',
+          'deep blue': 'rgb(0, 0, 139)',
+          'ocean blue': 'rgb(0, 102, 204)',
+          'sky blue': 'rgb(135, 206, 235)',
+          'turquoise': 'rgb(64, 224, 208)',
+          'gold': 'rgb(255, 215, 0)',
+          'amber': 'rgb(255, 191, 0)',
+          'burgundy': 'rgb(128, 0, 32)',
+          'maroon': 'rgb(128, 0, 0)',
+          'charcoal': 'rgb(54, 69, 79)',
+          'dark gray': 'rgb(64, 64, 64)',
+          'dark grey': 'rgb(64, 64, 64)'
+        };
+        
+        const cleaned = stripBrackets(colorName || '').trim();
+        if (!cleaned) return null;
+
+        // Exact matches first
+        if (simpleColors[cleaned]) return simpleColors[cleaned];
+        if (legacyColors[cleaned]) return legacyColors[cleaned];
+
+        // Synonym / normalized lookup
+        const normalized = cleaned.toLowerCase();
+        if (synonymColors[normalized]) {
+          console.log('[Theme] Mapped synonym color', cleaned, '->', synonymColors[normalized]);
+          return synonymColors[normalized];
+        }
+
+        // Heuristic fallback to nearest simple family
+        const families = [
+          { key: 'Blue', test: /(blue|navy|azure|indigo)/ },
+          { key: 'Red', test: /(red|crimson|burgundy|maroon)/ },
+          { key: 'Green', test: /(green|emerald|jade)/ },
+          { key: 'Orange', test: /(orange|amber)/ },
+          { key: 'Yellow', test: /(yellow|gold)/ },
+          { key: 'Purple', test: /(purple|violet|lavender|indigo)/ },
+          { key: 'Pink', test: /(pink|magenta|rose)/ },
+          { key: 'Teal', test: /(teal)/ },
+          { key: 'Cyan', test: /(cyan|turquoise|aqua)/ },
+          { key: 'Lime', test: /(lime|chartreuse)/ },
+          { key: 'Gray', test: /(gray|grey|charcoal|slate)/ },
+          { key: 'Black', test: /(black|ebony)/ },
+          { key: 'White', test: /(white|ivory)/ },
+          { key: 'Copper', test: /(copper|bronze)/ }
+        ];
+        for (const fam of families) {
+          if (fam.test.test(normalized)) {
+            console.log('[Theme] Fallback family', cleaned, '->', fam.key);
+            return simpleColors[fam.key];
+          }
+        }
+
+        // As a last resort, do not apply an invalid color
+        console.warn('[Theme] Unknown color, skipping:', cleaned);
+        return null;
+      }
+
+      function resolveBackgroundPaths(backgroundName) {
+        if (!backgroundName) return null;
+        const map = {
+          'CORE': ['Core_L.png', 'Core_R.png'],
+          'CLOUDS': ['Clouds_L.png', 'Clouds_R.png'],
+          'CRYSTAL': ['Crystal_L.png', 'Crystal_R.png'],
+          'DAISY': ['Daisy_L.png', 'Daisy_R.png'],
+          'ELECTRIFIED': ['Electrified_L.png', 'Electrified_R.png'],
+          'LIQUID': ['Liquid_L.png', 'Liquid_R.png'],
+          'GLITTER': ['Glitter_L.png', 'Glitter_R.png'],
+          'HEARTY': ['Hearty_L.png', 'Hearty_R.png'],
+          'MAGNETIC': ['Magnetic_L.png', 'Magnetic_R.png'],
+          'ME': ['Me_L.png', 'Me_R.png'],
+          'NEBULOSA': ['Nebulosa_L.png', 'Nebulosa_R.png'],
+          'OFF': ['Off_L.png', 'Off_R.png'],
+          'PERFORMANCE': ['Performance_L.png', 'Performance_R.png'],
+          'POOL': ['Pool_L.png', 'Pool_R.png'],
+          'RAINFOREST': ['Rainforest_L.png', 'Rainforest_R.png'],
+          'FPA': ['Fpa_L.png', 'Fpa_R.png']
+        };
+        const key = String(backgroundName).trim().toUpperCase();
+        const files = map[key];
+        if (!files) return null;
+        return [
+          `${CONFIG.masksBasePath}/NEW MASKS ABT/${files[0]}`,
+          `${CONFIG.masksBasePath}/NEW MASKS ABT/${files[1]}`
+        ];
+      }
+
+      function setColor(varName, colorName) {
+        const css = toCssColor(colorName);
+        if (css) {
+          document.documentElement.style.setProperty(varName, css);
+          console.log(`[Theme] Set ${varName} to ${css}`);
+        }
+      }
+
+      function setOverlay(imgId, src) {
+        const el = document.getElementById(imgId);
+        if (!el) return;
+        if (!src) {
+          el.removeAttribute('src');
+          el.style.display = 'none';
+          return;
+        }
+        el.src = src;
+        el.style.display = 'block';
+        console.log(`[Theme] Set overlay ${imgId} to ${src}`);
+      }
+
+      function normalizeMaskFilename(file) {
+        const s = String(file).trim().replace(/^\[|\]$/g, '');
+        // If filename already contains underscore + side, normalize case
+        const m = s.match(/^(.*?)(?:_([lLrR]))?\.(png|jpg|jpeg)$/i);
+        if (!m) return s; // leave as-is
+        const base = m[1];
+        const side = m[2] ? m[2].toUpperCase() : undefined;
+        const ext = m[3].toLowerCase();
+        // Capitalize first letter of base, keep rest lower
+        const prettyBase = base.length ? (base[0].toUpperCase() + base.slice(1).toLowerCase()) : base;
+        return side ? `${prettyBase}_${side}.${ext}` : `${prettyBase}.${ext}`;
+      }
+
+      function resolveMaskPath(maskName) {
+        if (!maskName) return null;
+        
+        // Map mask names to file patterns
+        const maskMap = {
+          'CORE': ['Core_L.png', 'Core_R.png'],
+          'LIQUID': ['Liquid_L.png', 'Liquid_R.png'],
+          'PERFORMANCE': ['Performance_L.png', 'Performance_R.png'],
+          'ELECTRIFIED': ['Electrified_L.png', 'Electrified_R.png'],
+          'CLOUDS': ['Clouds_L.png', 'Clouds_R.png'],
+          'CRYSTAL': ['Crystal_L.png', 'Crystal_R.png'],
+          'DAISY': ['Daisy_L.png', 'Daisy_R.png'],
+          'GLITTER': ['Glitter_L.png', 'Glitter_R.png'],
+          'HEARTY': ['Hearty_L.png', 'Hearty_R.png'],
+          'POOL': ['Pool_L.png', 'Pool_R.png'],
+          'NEBULOSA': ['Nebulosa_L.png', 'Nebulosa_R.png'],
+          'RAINFOREST': ['Rainforest_L.png', 'Rainforest_R.png'],
+          'FPA': ['Fpa_L.png', 'Fpa_R.png'],
+          'MAGNETIC': ['Magnetic_L.png', 'Magnetic_R.png'],
+          'ME': ['Me_L.png', 'Me_R.png'],
+          'OFF': ['Off_L.png', 'Off_R.png']
+        };
+
+        const cleaned = stripBrackets(maskName).toUpperCase();
+        const files = maskMap[cleaned];
+        
+        if (files) {
+          return [
+            `${CONFIG.masksBasePath}/NEW MASKS ABT/${files[0]}`,
+            `${CONFIG.masksBasePath}/NEW MASKS ABT/${files[1]}`
+          ];
+        }
+        
+        return null;
+      }
+
+      function playSoundEffect(soundName) {
+        if (!soundName) return;
+        try {
+          const cleaned = stripBrackets(soundName);
+          let src = cleaned;
+          
+          // Map to /public assets unless absolute
+          if (!/^https?:\/\//i.test(src) && !src.startsWith('/')) {
+            src = `/public/${src}`;
+          }
+          
+          const audio = new Audio(src);
+          audio.crossOrigin = 'anonymous';
+          audio.onerror = () => {
+            // Fallback to bundled sound if requested file missing
+            console.warn(`[Theme] Sound effect ${src} not found, using fallback`);
+            audio.onerror = null;
+            audio.src = '/public/hi.mp3';
+            audio.play().catch(() => {});
+          };
+          audio.play().catch(() => {});
+          console.log(`[Theme] Playing sound effect: ${src}`);
+        } catch (e) {
+          console.warn('[Theme] Sound effect error:', e);
+        }
+      }
+
+      function applyTheme(responseText) {
+        try {
+          console.log('[Theme] Processing response:', responseText);
+          
+          // Extract JSON from response with better regex (multi-line, nested braces)
+          const jsonMatch = responseText.match(/\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/);
+          if (!jsonMatch) {
+            console.log('[Theme] No JSON found in response, returning original text');
+            return responseText; // Return original text for TTS
+          }
+
+          console.log('[Theme] Found JSON:', jsonMatch[0]);
+          
+          // Try to parse JSON with error recovery
+          let themeData;
+          try {
+            themeData = JSON.parse(jsonMatch[0]);
+          } catch (parseError) {
+            console.error('[Theme] JSON parse error:', parseError);
+            console.log('[Theme] Attempting to fix malformed JSON...');
+            let fixedJson = jsonMatch[0]
+              .replace(/usergyro_name/g, 'user_name')
+              .replace(/([{,]\s*)(\w+):/g, '$1"$2":')
+              .replace(/:(\w+)([,}])/g, ':"$1"$2');
+            try { themeData = JSON.parse(fixedJson); console.log('[Theme] Successfully fixed JSON:', fixedJson); }
+            catch { console.error('[Theme] Could not fix JSON, using fallback'); return responseText; }
+          }
+          
+          console.log('[Theme] Parsed theme data:', themeData);
+
+          // New schema: { background, color1, color2 }
+          const background = themeData.background || themeData.mask;
+          const color1 = themeData.color1 || themeData.primaryColor;
+          const color2 = themeData.color2 || themeData.secondaryColor;
+
+          // Apply colors
+          if (color1) {
+            setColor('--primary-color', color1);
+            setColor('--accent-color', color1);
+          }
+          if (color2) {
+            setColor('--secondary-color', color2);
+          }
+
+          // Apply background overlays (ABT only)
+          if (background) {
+            const bgPaths = resolveBackgroundPaths(background) || resolveMaskPath(background);
+            if (bgPaths) {
+              setOverlay('maskOverlay_abt1', bgPaths[0]);
+              setOverlay('maskOverlay_abt2', bgPaths[1]);
+              setOverlay('maskOverlay_kombi1', null);
+              setOverlay('maskOverlay_kombi2', null);
+            }
+          }
+
+          // Return ONLY the descriptive text outside the JSON
+          const jsonStartIndex = responseText.indexOf(jsonMatch[0]);
+          const jsonEndIndex = jsonStartIndex + jsonMatch[0].length;
+          const textAfterJson = responseText.substring(jsonEndIndex).trim();
+          const textBeforeJson = responseText.substring(0, jsonStartIndex).trim();
+          const combinedText = [textBeforeJson, textAfterJson].filter(t => t.length > 0).join(' ').trim();
+          console.log('[Theme] Combined text for TTS:', combinedText);
+          return combinedText;
+
+        } catch (error) {
+          console.error('[Theme] Failed to parse/apply theme:', error);
+          return responseText; // Return original text if parsing fails
+        }
+      }
+
+      // UI Helper Functions
+      function updateStatus(status, label) {
+        if (!statusChip) return;
+        statusChip.className = `status-chip status-${status}`;
+        statusChip.textContent = label;
+      }
+
+      function hideInteractionHint() {
+        const interactionHint = document.getElementById('interactionHint');
+        if (interactionHint) {
+          interactionHint.style.animation = 'none';
+          interactionHint.style.opacity = '0';
+          interactionHint.style.display = 'none';
+        }
+      }
+
+      function showInteractionHint() {
+        const interactionHint = document.getElementById('interactionHint');
+        if (interactionHint) {
+          interactionHint.style.display = 'block';
+          interactionHint.style.opacity = '0.8';
+          interactionHint.style.animation = 'fadeInOut 3s ease-in-out infinite';
+        }
+      }
+
+      function showLoading(text = 'Thinking...') {
+        loadingText.textContent = text;
+        loadingOverlay.classList.add('show');
+      }
+
+      function hideLoading() {
+        loadingOverlay.classList.remove('show');
+      }
+
+      function showReadyFlourish() {
+        stageEl.classList.add('just-connected');
+        statusChip.classList.add('just-connected');
+        setTimeout(() => {
+          stageEl.classList.remove('just-connected');
+          statusChip.classList.remove('just-connected');
+        }, 1300);
+      }
+
+      // Main conversation handler
+      async function handleConversation(userMessage) {
+        if (isProcessing) return;
+        
+        isProcessing = true;
+        console.log('[Conversation] User:', userMessage);
+        
+        try {
+          // Check for exit commands in continuous mode
+          const exitCommands = ['stop', 'goodbye', 'bye', 'exit', 'end conversation', 'that\'s all'];
+          const userLower = userMessage.toLowerCase().trim();
+          
+          if (continuousConversation && exitCommands.some(cmd => userLower.includes(cmd))) {
+            continuousConversation = false;
+            console.log('[Conversation] Exit command detected, disabling continuous mode');
+            
+            await tts.speak("Goodbye! Tap the screen when you want to talk again.");
+            animator.setState(AvatarState.Idle).catch(() => {});
+            updateStatus('connected', 'Tap to start');
+            
+            // Show interaction hint again
+            showInteractionHint();
+            
+            isProcessing = false;
+            return;
+          }
+          
+          // Add user message to history
+          chatHistory.push({ role: 'user', content: userMessage });
+          
+          // Show thinking state
+          showLoading('Thinking...');
+          animator.setState(AvatarState.Thinking).catch(() => {});
+          
+          // Generate response from local LLM
+          const response = await llmClient.generateResponse(userMessage, chatHistory);
+          console.log('[Conversation] Assistant:', response);
+          
+          // Apply theme changes and get clean text for TTS
+          let cleanTextForTTS;
+          try {
+            cleanTextForTTS = applyTheme(response);
+            console.log('[Conversation] Theme applied, clean text for TTS:', cleanTextForTTS);
+            
+            // If no text outside JSON, don't speak anything (just apply theme silently)
+            if (!cleanTextForTTS || cleanTextForTTS.trim().length === 0) {
+              console.log('[Conversation] No text outside JSON - applying theme silently');
+              cleanTextForTTS = ""; // Empty string = no speech
+            }
+          } catch (themeError) {
+            console.error('[Conversation] Theme application error:', themeError);
+            cleanTextForTTS = response; // Fallback to original response only if parsing completely fails
+          }
+          
+          // Add assistant response to history
+          chatHistory.push({ role: 'assistant', content: response });
+          
+          // Update UI
+          hideLoading();
+          animator.setState(AvatarState.Speaking).catch(() => {});
+          
+          // Speak the clean descriptive text (only text outside JSON)
+          console.log('[Conversation] About to speak:', cleanTextForTTS);
+          if (cleanTextForTTS && cleanTextForTTS.trim().length > 0) {
+            await tts.speak(cleanTextForTTS);
+          } else {
+            console.log('[Conversation] No text to speak - theme applied silently');
+          }
+          
+          // Check if we should continue conversation automatically
+          if (continuousConversation) {
+            console.log('[Conversation] Continuous mode active, restarting voice conversation...');
+            // Small delay before starting to listen again
+            setTimeout(() => {
+              console.log('[Conversation] Timeout complete, calling startVoiceConversation()');
+              try {
+                startVoiceConversation();
+              } catch (voiceError) {
+                console.error('[Conversation] Voice restart error:', voiceError);
+                // Backup: try again after a longer delay
+                setTimeout(() => {
+                  console.log('[Conversation] Backup timeout, retrying voice conversation...');
+                  startVoiceConversation();
+                }, 1000);
+              }
+            }, 500);
+          } else {
+            console.log('[Conversation] Continuous mode not active, returning to idle');
+            // Return to idle
+            animator.setState(AvatarState.Idle).catch(() => {});
+            updateStatus('connected', 'Ready');
+          }
+          
+        } catch (error) {
+          console.error('[Conversation] Error:', error);
+          hideLoading();
+          animator.setState(AvatarState.Idle).catch(() => {});
+          updateStatus('disconnected', 'Error - Check local server');
+          
+          // Exit continuous mode on error to avoid infinite error loops
+          continuousConversation = false;
+          console.log('[Conversation] Continuous mode disabled due to error');
+          
+          // Speak error message
+          await tts.speak("Sorry, I'm having trouble connecting to my brain. Please make sure the local server is running.");
+        } finally {
+          isProcessing = false;
+        }
+      }
+
+      // Voice conversation handler
+      async function startVoiceConversation() {
+        console.log('[Voice] startVoiceConversation called, isProcessing:', isProcessing);
+        if (isProcessing) {
+          console.log('[Voice] Already processing, skipping');
+          return;
+        }
+        
+        try {
+          console.log('[Voice] Starting voice recognition...');
+          showLoading('Listening...');
+          animator.setState(AvatarState.Listening).catch(() => {});
+          updateStatus('connecting', 'Listening...');
+          
+          console.log('[Voice] Calling stt.startListening()...');
+          const userMessage = await stt.startListening();
+          console.log('[Voice] Recognized:', userMessage);
+          
+          console.log('[Voice] Calling handleConversation with:', userMessage);
+          await handleConversation(userMessage);
+          
+        } catch (error) {
+          console.error('[Voice] Error:', error);
+          hideLoading();
+          animator.setState(AvatarState.Idle).catch(() => {});
+          updateStatus('disconnected', 'Voice recognition failed');
+          
+          // Exit continuous mode on voice error
+          continuousConversation = false;
+          console.log('[Voice] Continuous mode disabled due to voice error');
+        }
+      }
+
+      // Initialize masks
+      function initializeMasks() {
+        const maskOverlay1 = document.getElementById('maskOverlay_abt1');
+        const maskOverlay2 = document.getElementById('maskOverlay_abt2');
+        
+        if (maskOverlay1) {
+          maskOverlay1.src = `${CONFIG.masksBasePath}/${CONFIG.defaultMasks.abt1}`;
+          maskOverlay1.style.display = 'block';
+        }
+        if (maskOverlay2) {
+          maskOverlay2.src = `${CONFIG.masksBasePath}/${CONFIG.defaultMasks.abt2}`;
+          maskOverlay2.style.display = 'block';
+        }
+      }
+
+      // Stage tap handler
+      async function handleStageTap() {
+        if (isProcessing) return;
+        
+        // Hide interaction hint on first tap
+        hideInteractionHint();
+        
+        // If already in continuous conversation mode, exit it
+        if (continuousConversation) {
+          continuousConversation = false;
+          console.log('[CUPRA] Screen tap detected - exiting continuous conversation mode');
+          
+          // Stop any ongoing speech recognition
+          stt.stopListening();
+          
+          // Provide feedback
+          // await tts.speak("Conversation ended. Tap the screen to start again."); // Removed spoken warning
+          animator.setState(AvatarState.Idle).catch(() => {});
+          updateStatus('connected', 'Tap to start');
+          
+          // Show interaction hint again
+          showInteractionHint();
+          
+          return;
+        }
+        
+        // Check local server connection
+        const isConnected = await llmClient.checkConnection();
+        if (!isConnected) {
+          updateStatus('disconnected', 'Local server offline');
+          await tts.speak("The local server is not available. Please start the local LLM server.");
+          return;
+        }
+        
+        updateStatus('connected', 'Connected');
+        showReadyFlourish();
+        
+        // Enable continuous conversation mode
+        continuousConversation = true;
+        console.log('[CUPRA] Continuous conversation mode enabled');
+        
+        // Start voice conversation
+        setTimeout(() => {
+          startVoiceConversation();
+        }, 1000);
+      }
+
+      // Event Listeners
+      if (stageEl) {
+        stageEl.style.cursor = 'pointer';
+        stageEl.addEventListener('click', handleStageTap);
+        stageEl.addEventListener('touchstart', handleStageTap, { passive: true });
+      }
+
+      // Initialize
+      console.log('[CUPRA Local] Initialization complete');
+      updateStatus('disconnected', 'Tap to start');
+      initializeMasks();
+      
+      // Initial connection check
+      setTimeout(async () => {
+        const isConnected = await llmClient.checkConnection();
+        if (isConnected) {
+          updateStatus('connected', 'Ready');
+          console.log('[CUPRA Local] Local server is available');
+        } else {
+          console.log('[CUPRA Local] Local server is offline');
+        }
+      }, 1000);
+    });
+  </script>
+</body>
+</html>

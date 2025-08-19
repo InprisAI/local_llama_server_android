@@ -1,0 +1,38 @@
+{
+  "server": {
+    "llm_port": 8080,
+    "web_port": 3000,
+    "host": "localhost"
+  },
+  "model": {
+    "default_path": null,
+    "context_size": 2048,
+    "max_tokens": 512,
+    "temperature": 0.7,
+    "top_p": 0.9
+  },
+  "ui": {
+    "avatar_animation_fps": 12,
+    "default_masks": {
+      "abt1": "NEW MASKS ABT/Clouds_L.png",
+      "abt2": "NEW MASKS ABT/Clouds_R.png"
+    },
+    "colors": {
+      "primary": "#0f172a",
+      "secondary": "#334155",
+      "accent": "#2563eb"
+    }
+  },
+  "voice": {
+    "tts_language": "en-US",
+    "tts_rate": 0.9,
+    "tts_pitch": 1.0,
+    "tts_volume": 0.8,
+    "tts_voice_preference": "en-US-Female",
+    "stt_language": "en-US"
+  },
+  "chat": {
+    "max_history_length": 10,
+    "system_prompt": "You are a helpful AI assistant for CUPRA vehicles. You provide concise, friendly, and informative responses. Keep your answers brief and conversational, typically 1-3 sentences unless more detail is specifically requested."
+  }
+}
