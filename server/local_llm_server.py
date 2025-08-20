@@ -278,25 +278,46 @@ async def generate_response(request_data: dict):
         prompt = create_prompt(request.message, request.history)
         logger.info(f"Generating response for: {request.message[:100]}...")
         
-        # Generate response with simple stop sequences
-        response = llm_model(
+        # Generate response with streaming to measure performance
+        stream = llm_model(
             prompt,
             max_tokens=request.max_tokens,
             temperature=request.temperature,
             top_p=request.top_p,
             stop=request.stop or ["User:", "\nUser:", "Human:", "\n\n"],
-            echo=False
+            echo=False,
+            stream=True
         )
         
-        # Extract response text
-        response_text = response['choices'][0]['text'].strip()
+        response_text = ""
+        first_token_time = None
+        token_count = 0
+        
+        for output in stream:
+            if first_token_time is None:
+                first_token_time = time.time()
+                ttft = first_token_time - start_time
+                logger.info(f"Time to first token: {ttft:.2f}s")
+
+            token = output['choices'][0]['text']
+            response_text += token
+            token_count += 1
+        
+        processing_time = time.time() - start_time
+        
+        # Log performance metrics
+        if processing_time > 0 and token_count > 0:
+            tokens_per_sec = token_count / processing_time
+            logger.info(
+                f"Inference completed: {token_count} tokens in {processing_time:.2f}s "
+                f"({tokens_per_sec:.2f} tokens/sec)"
+            )
         
         # Clean up common artifacts
         if response_text.startswith("Assistant:"):
             response_text = response_text[10:].strip()
         
-        processing_time = time.time() - start_time
-        logger.info(f"Response generated in {processing_time:.2f}s: {response_text[:100]}...")
+        logger.info(f"Full response: {response_text[:100]}...")
         
         return {
             "response": response_text,
@@ -319,8 +340,8 @@ def load_model(model_path: str, capacity_bytes: int = None, **kwargs) -> Llama:
         "n_ctx": 1200,                # context window
         "n_batch": 256,              # prompt eval batch size
     }
-        # "type_k": llama_cpp.GGML_TYPE_Q4_0,  
-        # "type_v": llama_cpp.GGML_TYPE_Q4_0,  
+    # "type_k": llama_cpp.GGML_TYPE_Q4_0,  
+    # "type_v": llama_cpp.GGML_TYPE_Q4_0,  
     # default_params = {
     #     "n_ctx": 4096,  # Increased context window for CUPRA system prompt
     #     "n_batch": 128,  # Batch size
