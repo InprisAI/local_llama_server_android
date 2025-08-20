@@ -21,8 +21,7 @@ import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import os
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
+ from fastapi.staticfiles import StaticFiles
 
 # Try to import llama-cpp-python
 try:
@@ -317,8 +316,8 @@ def load_model(model_path: str, capacity_bytes: int = None, **kwargs) -> Llama:
     default_params = {
         "n_ctx": 8192,                # context window
         "n_batch": 1024,              # prompt eval batch size
-        # "type_k": llama_cpp.GGML_TYPE_Q4_0,  # Commented out - undefined
-        # "type_v": llama_cpp.GGML_TYPE_Q4_0,  # Commented out - undefined
+        "type_k": llama_cpp.GGML_TYPE_Q4_0,  # Commented out - undefined
+        "type_v": llama_cpp.GGML_TYPE_Q4_0,  # Commented out - undefined
     }
     # default_params = {
     #     "n_ctx": 4096,  # Increased context window for CUPRA system prompt
@@ -351,7 +350,7 @@ def load_model(model_path: str, capacity_bytes: int = None, **kwargs) -> Llama:
         if not capacity_bytes:
             capacity_bytes = 4 * 1024**3  # ~4 GiB
 
-        # model.set_cache(LlamaRAMCache(capacity_bytes=capacity_bytes))  # Commented out - undefined  
+        model.set_cache(LlamaRAMCache(capacity_bytes=capacity_bytes))  # Commented out - undefined  
 
         # …or on-disk cache (persists across runs; slower than RAM but big)
         # model.set_cache(LlamaDiskCache(capacity_bytes=20 * 1024**3))  # ~20 GiB
