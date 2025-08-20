@@ -20,6 +20,8 @@ from typing import List, Optional
 import os
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
+from flask import Response, stream_with_context
+import json
 
 # Try to import llama-cpp-python
 try:
@@ -297,6 +299,78 @@ def generate_response():
     except Exception as e:
         logger.error(f"Error generating response: {e}")
         return jsonify({"detail": f"Generation failed: {str(e)}"}), 500
+
+@app.route("/generate_stream", methods=["POST"])
+def generate_response_stream():
+    """Generate a streamed response (SSE) sending tokens as they are produced."""
+    if llm_model is None:
+        return jsonify({"detail": "Model not loaded"}), 503
+
+    try:
+        request_data = request.get_json()
+        if not request_data:
+            return jsonify({"detail": "Invalid JSON"}), 400
+
+        message = request_data.get("message", "")
+        history_data = request_data.get("history", [])
+        max_tokens = request_data.get("max_tokens", 200)
+        temperature = request_data.get("temperature", 0.4)
+        top_p = request_data.get("top_p", 0.9)
+        stop = request_data.get("stop")
+
+        # Convert history data to ChatMessage objects
+        history = [ChatMessage(msg.get("role", ""), msg.get("content", "")) for msg in history_data]
+
+        # Limit history for performance
+        max_history_turns = int(model_config.get("max_history_turns", 2))
+        if max_history_turns > 0 and len(history) > max_history_turns:
+            history = history[-max_history_turns:]
+    except Exception as e:
+        return jsonify({"detail": f"Invalid request data: {str(e)}"}), 400
+
+    start_time = time.time()
+
+    def event_stream():
+        try:
+            prompt = create_prompt(message, history)
+            logger.info(f"[SSE] Streaming response for: {message[:100]}...")
+            stream = llm_model(
+                prompt,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                stop=stop or ["User:", "\nUser:", "Human:", "\n\n"],
+                echo=False,
+                stream=True
+            )
+            first_token_time = None
+            token_count = 0
+            for chunk in stream:
+                if first_token_time is None:
+                    first_token_time = time.time()
+                    ttft = first_token_time - start_time
+                    logger.info(f"[SSE] Time to first token: {ttft:.2f}s")
+                    yield f"event: stats\ndata: {json.dumps({'ttft': ttft})}\n\n"
+                token = chunk['choices'][0]['text']
+                token_count += 1
+                yield f"data: {json.dumps({'token': token})}\n\n"
+            total_time = time.time() - start_time
+            if token_count > 0 and total_time > 0:
+                tps = token_count / total_time
+                logger.info(f"[SSE] Completed: {token_count} tokens in {total_time:.2f}s ({tps:.2f} tok/s)")
+            yield f"data: {json.dumps({'done': True, 'processing_time': total_time})}\n\n"
+        except GeneratorExit:
+            logger.info("[SSE] Client disconnected")
+        except Exception as e:
+            logger.error(f"[SSE] Error during streaming: {e}")
+            yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+
+    headers = {
+        'Cache-Control': 'no-cache',
+        'X-Accel-Buffering': 'no',
+        'Access-Control-Allow-Origin': '*'
+    }
+    return Response(stream_with_context(event_stream()), mimetype='text/event-stream', headers=headers)
 
 def load_model(model_path: str, capacity_bytes: int = None, enable_cache: bool = True, cache_type: str = "ram", warm_cache: bool = True, **kwargs) -> Llama:
     """Load the GGUF model."""
