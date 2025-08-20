@@ -337,8 +337,8 @@ def load_model(model_path: str, capacity_bytes: int = None, **kwargs) -> Llama:
     
     # Default parameters optimized for mobile/local inference
     default_params = {
-        "n_ctx": 1200,                # context window
-        "n_batch": 128,              # prompt eval batch size
+        "n_ctx": 8192,                # context window
+        "n_batch": 2048,              # prompt eval batch size
         "n_gpu_layers": 0,
     }
     # "type_k": llama_cpp.GGML_TYPE_Q4_0,  
@@ -411,16 +411,18 @@ def main():
         default="0.0.0.0",
         help="Host to bind to (default: 0.0.0.0)"
     )
-    parser.add_argument(
-        "-nc""--n-ctx", 
-        type=int, 
-        help="Context window size"
-    )
-    parser.add_argument(
-        "-nt""--n-threads", 
-        type=int, 
-        help="Number of threads"
-    )
+    # parser.add_argument(
+    #     "--n-ctx", 
+    #     type=int, 
+    #     default=2048,
+    #     help="Context window size (default: 2048)"
+    # )
+    # parser.add_argument(
+    #     "--n-threads", 
+    #     type=int, 
+    #     default=None,
+    #     help="Number of threads (default: auto-detect)"
+    # )
     # parser.add_argument(
     #     "--n-gpu-layers", 
     #     type=int, 
@@ -459,8 +461,7 @@ def main():
         app, 
         host=args.host, 
         port=args.port,
-        log_level="info" if not args.verbose else "debug",
-        access_log=False
+        log_level="info" if not args.verbose else "debug"
     )
 
 
