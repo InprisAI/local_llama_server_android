@@ -22,9 +22,6 @@ from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from flask import Response, stream_with_context
 import json
-import subprocess
-import threading
-import shutil
 
 # Try to import llama-cpp-python
 try:
@@ -98,64 +95,6 @@ def favicon():
 
 # CORS middleware for browser access
 CORS(app)
-
-audio_lock = threading.Lock()
-current_tts_process = None  # type: ignore
-
-def _has_termux_tts() -> bool:
-    return shutil.which("termux-tts-speak") is not None
-
-@app.route("/speak", methods=["POST"])
-def speak_tts():
-    """Speak text using Android device TTS via Termux API. Blocks until finished."""
-    if not _has_termux_tts():
-        return jsonify({"detail": "Device TTS not available (termux-api not installed)"}), 501
-    try:
-        data = request.get_json() or {}
-        text = str(data.get("text", "")).strip()
-        if not text:
-            return jsonify({"detail": "Empty text"}), 400
-        rate = float(data.get("rate", 1.0))
-        pitch = float(data.get("pitch", 1.0))
-        lang = str(data.get("lang", "en-US"))
-
-        cmd = [
-            "termux-tts-speak",
-            "-r", str(rate),
-            "-p", str(pitch),
-            "-l", lang,
-            text,
-        ]
-        logger.info(f"[TTS] Speaking via device TTS: '{text[:48]}...' (lang={lang}, rate={rate}, pitch={pitch})")
-        global current_tts_process
-        with audio_lock:
-            # Stop any previous
-            try:
-                if current_tts_process and current_tts_process.poll() is None:
-                    current_tts_process.terminate()
-            except Exception:
-                pass
-            current_tts_process = subprocess.Popen(cmd)
-        # Wait until finished
-        current_tts_process.wait()
-        return jsonify({"status": "ok"})
-    except Exception as e:
-        logger.error(f"[TTS] speak error: {e}")
-        return jsonify({"detail": f"speak failed: {str(e)}"}), 500
-
-@app.route("/speak/stop", methods=["POST"]) 
-def stop_speak_tts():
-    """Stop current device TTS if running."""
-    try:
-        global current_tts_process
-        with audio_lock:
-            if current_tts_process and current_tts_process.poll() is None:
-                current_tts_process.terminate()
-                current_tts_process = None
-        return jsonify({"status": "stopped"})
-    except Exception as e:
-        logger.error(f"[TTS] stop error: {e}")
-        return jsonify({"detail": f"stop failed: {str(e)}"}), 500
 
 def format_chat_history(history: List[ChatMessage]) -> str:
     """Format chat history into a prompt string."""
@@ -641,8 +580,7 @@ def main():
     app.run(
         host=args.host, 
         port=args.port,
-        debug=args.verbose,
-        threaded=True
+        debug=args.verbose
     )
 
 if __name__ == "__main__":
