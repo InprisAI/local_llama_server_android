@@ -316,9 +316,9 @@ def load_model(model_path: str, capacity_bytes: int = None, **kwargs) -> Llama:
     default_params = {
         "n_ctx": 8192,                # context window
         "n_batch": 1024,              # prompt eval batch size
-        "type_k": llama_cpp.GGML_TYPE_Q4_0,  # Commented out - undefined
-        "type_v": llama_cpp.GGML_TYPE_Q4_0,  # Commented out - undefined
     }
+        # "type_k": llama_cpp.GGML_TYPE_Q4_0,  
+        # "type_v": llama_cpp.GGML_TYPE_Q4_0,  
     # default_params = {
     #     "n_ctx": 4096,  # Increased context window for CUPRA system prompt
     #     "n_batch": 128,  # Batch size
