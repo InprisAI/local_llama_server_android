@@ -308,7 +308,7 @@ def load_model(model_path: str, capacity_bytes: int = None, enable_cache: bool =
     # Default parameters optimized for aggressive on-device performance
     default_params = {
         "n_ctx": 1024,                # context window
-        "n_batch": 512,              # larger prompt eval batch for faster prefix eval
+        "n_batch": 1024,              # larger prompt eval batch for faster prefix eval
         "n_gpu_layers": 0,
         "use_mmap": True,
     }
