@@ -474,10 +474,24 @@
           this.synth = window.speechSynthesis;
           this.voice = null;
           this.loadVoices();
+          this.deviceApiAvailable = false;
+          this.checkDeviceApi();
           
           // Ensure voices are loaded (sometimes they load asynchronously)
           if (this.synth.onvoiceschanged !== undefined) {
             this.synth.onvoiceschanged = () => this.loadVoices();
+          }
+        }
+
+        async checkDeviceApi() {
+          try {
+            const res = await fetch(`${CONFIG.localServerUrl}/health`, { method: 'GET' });
+            if (res.ok) {
+              // We'll optimistically consider device TTS available and handle 501 gracefully
+              this.deviceApiAvailable = true;
+            }
+          } catch (_) {
+            this.deviceApiAvailable = false;
           }
         }
 
@@ -506,36 +520,61 @@
           }
         }
 
-        speak(text) {
-          return new Promise((resolve) => {
-            if (!text.trim()) {
-              resolve();
-              return;
+        async speakDevice(text) {
+          const res = await fetch(`${CONFIG.localServerUrl}/speak`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text, lang: 'en-US', rate: 1.0, pitch: 1.0 })
+          });
+          if (res.status === 501) {
+            throw new Error('device_tts_unavailable');
+          }
+          if (!res.ok) {
+            throw new Error(`device_tts_failed: ${res.status}`);
+          }
+        }
+
+        async stopDevice() {
+          try { await fetch(`${CONFIG.localServerUrl}/speak/stop`, { method: 'POST' }); } catch (_) {}
+        }
+
+        async speak(text) {
+          return new Promise(async (resolve) => {
+            const trimmed = (text || '').trim();
+            if (!trimmed) { resolve(); return; }
+
+            // Prefer device TTS when possible
+            if (this.deviceApiAvailable) {
+              try {
+                await this.speakDevice(trimmed);
+                resolve();
+                return;
+              } catch (e) {
+                if (String(e.message).includes('device_tts_unavailable')) {
+                  this.deviceApiAvailable = false;
+                } else {
+                  console.warn('[TTS] Device TTS error, falling back to Web Speech:', e);
+                }
+              }
             }
 
-            const utterance = new SpeechSynthesisUtterance(text);
-            
-            // Force English voice selection
-            if (this.voice) {
-              utterance.voice = this.voice;
-            }
-            utterance.lang = 'en-US'; // Explicitly set language
+            // Fallback: Web Speech API
+            const utterance = new SpeechSynthesisUtterance(trimmed);
+            if (this.voice) utterance.voice = this.voice;
+            utterance.lang = 'en-US';
             utterance.rate = 0.9;
             utterance.pitch = 1.0;
             utterance.volume = 0.8;
-
             utterance.onend = resolve;
-            utterance.onerror = (error) => {
-              console.warn('[TTS] Error:', error);
-              resolve();
-            };
-
-            console.log('[TTS] Speaking:', text.substring(0, 50) + '...');
+            utterance.onerror = () => resolve();
+            console.log('[TTS] Speaking (web):', trimmed.substring(0, 50) + '...');
             this.synth.speak(utterance);
           });
         }
 
         stop() {
+          // Stop both device and web TTS
+          this.stopDevice().catch(() => {});
           this.synth.cancel();
         }
       }
