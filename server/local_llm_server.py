@@ -461,7 +461,8 @@ def main():
         app, 
         host=args.host, 
         port=args.port,
-        log_level="info" if not args.verbose else "debug"
+        log_level="info" if not args.verbose else "debug",
+        access_log=False
     )
 
 
