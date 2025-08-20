@@ -234,7 +234,6 @@ def generate_response():
             top_p=top_p,
             stop=stop or ["User:", "\nUser:", "Human:", "\n\n"],
             echo=False,
-            cache_prompt=bool(model_config.get("enable_cache", False)),
             stream=True
         )
         
