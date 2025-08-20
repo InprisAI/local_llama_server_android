@@ -323,7 +323,7 @@ def load_model(model_path: str, capacity_bytes: int = None, **kwargs) -> Llama:
 
         # add prompt caching
         if not capacity_bytes:
-            capacity_bytes = 4 * 1024**3  # ~4 GiB
+            capacity_bytes = 8 * 1024**3  # ~4 GiB
 
         # model.set_cache(LlamaRAMCache(capacity_bytes=capacity_bytes))  # Commented out - undefined  
 
