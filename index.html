@@ -1108,7 +1108,7 @@
                 fullAssistantText += token;
                 console.log('[Stream] Full text so far:', fullAssistantText.substring(0, 100) + '...');
                 
-                // Simple JSON detection: look for complete JSON at start
+                // Check for JSON at start and apply theme if found
                 if (!haveAppliedTheme) {
                   const jsonMatch = fullAssistantText.match(/^\s*\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/);
                   if (jsonMatch) {
@@ -1117,26 +1117,32 @@
                       const appliedText = applyTheme(fullAssistantText);
                       speechBuffer = appliedText || '';
                       console.log('[Stream] Applied theme, speech buffer:', speechBuffer);
-                      
-                      // Switch to speaking immediately
-                      if (!speakingStarted) {
-                        console.log('[Stream] Switching to Speaking state');
-                        hideLoading();
-                        animator.setState(AvatarState.Speaking).catch(() => {});
-                        speakingStarted = true;
-                      }
-                      flushSentences();
                       haveAppliedTheme = true;
                     } catch (e) {
                       console.warn('[Stream] applyTheme failed:', e);
+                      // If theme parsing fails, treat as normal text
+                      speechBuffer += token;
                     }
+                  } else {
+                    // No JSON detected yet, accumulate all tokens for speech
+                    console.log('[Stream] No JSON, adding token to speech buffer:', token);
+                    speechBuffer += token;
                   }
                 } else {
-                  // After JSON: accumulate text for speech
-                  console.log('[Stream] Adding token to speech buffer:', token);
+                  // After JSON was processed: continue accumulating
+                  console.log('[Stream] Post-JSON, adding token to speech buffer:', token);
                   speechBuffer += token;
-                  flushSentences();
                 }
+                
+                // Always try to flush complete sentences on every token
+                if (!speakingStarted) {
+                  console.log('[Stream] Switching to Speaking state');
+                  hideLoading();
+                  animator.setState(AvatarState.Speaking).catch(() => {});
+                  speakingStarted = true;
+                }
+                flushSentences();
+                
               } else if (type === 'done') {
                 console.log('[Stream] Stream done, final speech buffer:', speechBuffer);
                 if (speechBuffer.trim().length > 0) {
