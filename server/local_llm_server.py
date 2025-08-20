@@ -29,6 +29,13 @@ except ImportError:
     print("pip install llama-cpp-python")
     exit(1)
 
+# Optional prompt cache classes (available in newer llama-cpp-python versions)
+try:
+    from llama_cpp import LlamaRAMCache, LlamaDiskCache  # type: ignore
+except Exception:
+    LlamaRAMCache = None  # type: ignore
+    LlamaDiskCache = None  # type: ignore
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -227,6 +234,7 @@ def generate_response():
             top_p=top_p,
             stop=stop or ["User:", "\nUser:", "Human:", "\n\n"],
             echo=False,
+            cache_prompt=bool(model_config.get("enable_cache", False)),
             stream=True
         )
         
@@ -257,7 +265,7 @@ def generate_response():
         logger.error(f"Error generating response: {e}")
         return jsonify({"detail": f"Generation failed: {str(e)}"}), 500
 
-def load_model(model_path: str, capacity_bytes: int = None, **kwargs) -> Llama:
+def load_model(model_path: str, capacity_bytes: int = None, enable_cache: bool = True, cache_type: str = "ram", warm_cache: bool = False, **kwargs) -> Llama:
     """Load the GGUF model."""
     if not os.path.exists(model_path):
         raise FileNotFoundError(f"Model file not found: {model_path}")
@@ -288,6 +296,9 @@ def load_model(model_path: str, capacity_bytes: int = None, **kwargs) -> Llama:
     # Store config for status endpoint
     model_config.update({
         "model_path": model_path,
+        "enable_cache": enable_cache,
+        "cache_type": cache_type,
+        "capacity_bytes": capacity_bytes,
         **params
     })
     
@@ -299,15 +310,42 @@ def load_model(model_path: str, capacity_bytes: int = None, **kwargs) -> Llama:
         load_time = time.time() - start_time
         logger.info(f"Model loaded successfully in {load_time:.2f}s")
 
-        # add prompt caching
-        if not capacity_bytes:
-            capacity_bytes = 8 * 1024**3  # ~4 GiB
+        # Enable prompt caching if requested
+        if enable_cache:
+            try:
+                if capacity_bytes is None:
+                    # Conservative default suitable for Termux/Android devices
+                    capacity_bytes = 256 * 1024**2  # 256 MiB
 
-        # model.set_cache(LlamaRAMCache(capacity_bytes=capacity_bytes))  # Commented out - undefined  
+                if cache_type == "disk":
+                    if 'LlamaDiskCache' in globals() and LlamaDiskCache is not None:  # type: ignore
+                        model.set_cache(LlamaDiskCache(capacity_bytes=capacity_bytes))  # type: ignore
+                        logger.info(f"Enabled DISK prompt cache (capacity {capacity_bytes} bytes)")
+                    else:
+                        logger.warning("LlamaDiskCache not available; falling back to RAM cache")
+                        if 'LlamaRAMCache' in globals() and LlamaRAMCache is not None:  # type: ignore
+                            model.set_cache(LlamaRAMCache(capacity_bytes=capacity_bytes))  # type: ignore
+                            logger.info(f"Enabled RAM prompt cache (capacity {capacity_bytes} bytes)")
+                        else:
+                            logger.warning("LlamaRAMCache not available; prompt caching disabled")
+                else:
+                    if 'LlamaRAMCache' in globals() and LlamaRAMCache is not None:  # type: ignore
+                        model.set_cache(LlamaRAMCache(capacity_bytes=capacity_bytes))  # type: ignore
+                        logger.info(f"Enabled RAM prompt cache (capacity {capacity_bytes} bytes)")
+                    else:
+                        logger.warning("LlamaRAMCache not available; prompt caching disabled")
+            except Exception as cache_err:
+                logger.warning(f"Failed to enable prompt cache: {cache_err}")
 
-        # …or on-disk cache (persists across runs; slower than RAM but big)
-        # model.set_cache(LlamaDiskCache(capacity_bytes=20 * 1024**3))  # ~20 GiB
-        # (capacity_bytes is the knob you tune)
+            # Optional: warm the cache with the system prompt so first request is faster
+            if warm_cache:
+                try:
+                    warm_text = create_prompt("", [])
+                    tokens = model.tokenize(warm_text.encode("utf-8"))
+                    model.eval(tokens)
+                    logger.info("Prompt cache warmed with system prompt")
+                except Exception as warm_err:
+                    logger.warning(f"Failed to warm prompt cache: {warm_err}")
 
         return model
         
@@ -345,6 +383,23 @@ def main():
         action="store_true",
         help="Enable verbose logging"
     )
+    parser.add_argument(
+        "--disable-cache",
+        action="store_true",
+        help="Disable prompt cache (enabled by default)"
+    )
+    parser.add_argument(
+        "--cache-type",
+        type=str,
+        default="ram",
+        choices=["ram", "disk"],
+        help="Prompt cache type: 'ram' or 'disk' (default: ram)"
+    )
+    parser.add_argument(
+        "--warm-cache",
+        action="store_true",
+        help="Warm the cache at startup with the system prompt"
+    )
     
     args = parser.parse_args()
     
@@ -358,6 +413,9 @@ def main():
         llm_model = load_model(
             model_path=args.model_path,
             capacity_bytes=args.capacity_bytes,
+            enable_cache=not args.disable_cache,
+            cache_type=args.cache_type,
+            warm_cache=args.warm_cache,
             verbose=args.verbose
         )
         logger.info("Server ready to handle requests")
