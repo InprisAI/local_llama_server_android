@@ -14,14 +14,12 @@ Requirements:
 """
 
 import argparse
-import asyncio
 import logging
 import time
-from typing import List, Dict, Optional
+from typing import List, Optional
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 import os
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -41,29 +39,38 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Request/Response models
-class ChatMessage(BaseModel):
-    role: str  # 'user' or 'assistant'
-    content: str
+# Request/Response models using standard Python classes
+class ChatMessage:
+    def __init__(self, role: str, content: str):
+        self.role = role  # 'user' or 'assistant'
+        self.content = content
 
-class GenerateRequest(BaseModel):
-    message: str
-    history: List[ChatMessage] = []
-    max_tokens: int = 200
-    temperature: float = 0.4
-    top_p: float = 0.9
-    stop: Optional[List[str]] = None
+class GenerateRequest:
+    def __init__(self, message: str, history: List[ChatMessage] = None, 
+                 max_tokens: int = 200, temperature: float = 0.4, 
+                 top_p: float = 0.9, stop: Optional[List[str]] = None):
+        self.message = message
+        self.history = history or []
+        self.max_tokens = max_tokens
+        self.temperature = temperature
+        self.top_p = top_p
+        self.stop = stop
 
-class GenerateResponse(BaseModel):
-    response: str
-    processing_time: float
+class GenerateResponse:
+    def __init__(self, response: str, processing_time: float):
+        self.response = response
+        self.processing_time = processing_time
 
-class ServerStatus(BaseModel):
-    status: str
-    model_loaded: bool
-    model_path: Optional[str] = None
-    context_size: Optional[int] = None
-    memory_usage_mb: Optional[float] = None
+class ServerStatus:
+    def __init__(self, status: str, model_loaded: bool, 
+                 model_path: Optional[str] = None, context_size: Optional[int] = None,
+                 memory_usage_mb: Optional[float] = None):
+        self.status = status
+        self.model_loaded = model_loaded
+        self.model_path = model_path
+        self.context_size = context_size
+        self.memory_usage_mb = memory_usage_mb
+
 
 # Global model instance
 llm_model: Optional[Llama] = None
@@ -221,19 +228,47 @@ async def get_status():
     except ImportError:
         pass
     
-    return ServerStatus(
+    status_obj = ServerStatus(
         status="ready" if llm_model is not None else "model_not_loaded",
         model_loaded=llm_model is not None,
         model_path=model_config.get("model_path"),
         context_size=model_config.get("n_ctx"),
         memory_usage_mb=memory_usage
     )
+    return {
+        "status": status_obj.status,
+        "model_loaded": status_obj.model_loaded,
+        "model_path": status_obj.model_path,
+        "context_size": status_obj.context_size,
+        "memory_usage_mb": status_obj.memory_usage_mb
+    }
 
 @app.post("/generate")
-async def generate_response(request: GenerateRequest) -> GenerateResponse:
+async def generate_response(request_data: dict):
     """Generate a response using the local GGUF model."""
     if llm_model is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
+    
+    # Parse request data
+    try:
+        message = request_data.get("message", "")
+        history_data = request_data.get("history", [])
+        max_tokens = request_data.get("max_tokens", 200)
+        temperature = request_data.get("temperature", 0.4)
+        top_p = request_data.get("top_p", 0.9)
+        stop = request_data.get("stop")
+        
+        # Convert history data to ChatMessage objects
+        history = []
+        for msg_data in history_data:
+            if isinstance(msg_data, dict):
+                history.append(ChatMessage(msg_data.get("role", ""), msg_data.get("content", "")))
+            elif hasattr(msg_data, "role") and hasattr(msg_data, "content"):
+                history.append(msg_data)
+        
+        request = GenerateRequest(message, history, max_tokens, temperature, top_p, stop)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid request data: {str(e)}")
     
     start_time = time.time()
     
@@ -262,10 +297,10 @@ async def generate_response(request: GenerateRequest) -> GenerateResponse:
         processing_time = time.time() - start_time
         logger.info(f"Response generated in {processing_time:.2f}s: {response_text[:100]}...")
         
-        return GenerateResponse(
-            response=response_text,
-            processing_time=processing_time
-        )
+        return {
+            "response": response_text,
+            "processing_time": processing_time
+        }
         
     except Exception as e:
         logger.error(f"Error generating response: {e}")
@@ -282,8 +317,8 @@ def load_model(model_path: str, capacity_bytes: int = None, **kwargs) -> Llama:
     default_params = {
         "n_ctx": 8192,                # context window
         "n_batch": 1024,              # prompt eval batch size
-        "type_k": llama_cpp.GGML_TYPE_Q4_0,
-        "type_v": llama_cpp.GGML_TYPE_Q4_0,
+        # "type_k": llama_cpp.GGML_TYPE_Q4_0,  # Commented out - undefined
+        # "type_v": llama_cpp.GGML_TYPE_Q4_0,  # Commented out - undefined
     }
     # default_params = {
     #     "n_ctx": 4096,  # Increased context window for CUPRA system prompt
@@ -314,9 +349,9 @@ def load_model(model_path: str, capacity_bytes: int = None, **kwargs) -> Llama:
 
         # add prompt caching
         if not capacity_bytes:
-            capacity_bytes = 4 * 1024**3 # ~4 GiB
+            capacity_bytes = 4 * 1024**3  # ~4 GiB
 
-        model.set_cache(LlamaRAMCache(capacity_bytes=capacity_bytes))  
+        # model.set_cache(LlamaRAMCache(capacity_bytes=capacity_bytes))  # Commented out - undefined  
 
         # …or on-disk cache (persists across runs; slower than RAM but big)
         # model.set_cache(LlamaDiskCache(capacity_bytes=20 * 1024**3))  # ~20 GiB
@@ -405,6 +440,8 @@ def main():
         port=args.port,
         log_level="info" if not args.verbose else "debug"
     )
+
+
 
 if __name__ == "__main__":
     main()
