@@ -57,13 +57,13 @@ class GenerateRequest:
 llm_model: Optional[Llama] = None
 model_config = {}
 
-# Flask app
-app = Flask(__name__)
-
 # Paths for static serving (serve UI from the same server)
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 INDEX_HTML = os.path.join(BASE_DIR, "index.html")
+
+# Flask app
+app = Flask(__name__, static_folder=STATIC_DIR, static_url_path="/static")
 
 # Serve index.html at root
 @app.route("/")
@@ -72,10 +72,13 @@ def serve_index():
         return send_from_directory(BASE_DIR, "index.html")
     return jsonify({"status": "ui_not_found", "detail": INDEX_HTML}), 404
 
-# Serve static files
-@app.route('/static/<path:path>')
-def serve_static(path):
-    return send_from_directory(STATIC_DIR, path)
+# Optional: serve favicon to avoid 404 noise
+@app.route('/favicon.ico')
+def favicon():
+    candidate = os.path.join(STATIC_DIR, 'favicon.ico')
+    if os.path.isfile(candidate):
+        return send_from_directory(STATIC_DIR, 'favicon.ico')
+    return ('', 204)
 
 # CORS middleware for browser access
 CORS(app)
@@ -238,29 +241,38 @@ def generate_response():
         prompt = create_prompt(message, history)
         logger.info(f"Generating response for: {message[:100]}...")
         
-        # Generate response
-        response = llm_model(
+        # Generate response with streaming to capture timing metrics
+        stream = llm_model(
             prompt,
             max_tokens=max_tokens,
             temperature=temperature,
             top_p=top_p,
             stop=stop or ["User:", "\nUser:", "Human:", "\n\n"],
-            echo=False
+            echo=False,
+            stream=True
         )
         
-        # Extract response text
-        response_text = response['choices'][0]['text'].strip()
+        response_text = ""
+        first_token_time = None
+        token_count = 0
         
-        # Clean up common artifacts
-        if response_text.startswith("Assistant:"):
-            response_text = response_text[10:].strip()
+        for chunk in stream:
+            if first_token_time is None:
+                first_token_time = time.time()
+                ttft = first_token_time - start_time
+                logger.info(f"Time to first token: {ttft:.2f}s")
+            token = chunk['choices'][0]['text']
+            response_text += token
+            token_count += 1
         
-        processing_time = time.time() - start_time
-        logger.info(f"Response generated in {processing_time:.2f}s: {response_text[:100]}...")
+        total_time = time.time() - start_time
+        if token_count > 0 and total_time > 0:
+            tps = token_count / total_time
+            logger.info(f"Completed: {token_count} tokens in {total_time:.2f}s ({tps:.2f} tok/s)")
         
         return jsonify({
-            "response": response_text,
-            "processing_time": processing_time
+            "response": response_text.strip(),
+            "processing_time": total_time
         })
         
     except Exception as e:
@@ -376,6 +388,10 @@ def main():
         logger.error(f"Failed to initialize model: {e}")
         exit(1)
     
+    # Reduce werkzeug request logging unless verbose
+    if not args.verbose:
+        logging.getLogger('werkzeug').setLevel(logging.ERROR)
+
     # Run server
     logger.info(f"Starting server on {args.host}:{args.port}")
     app.run(
