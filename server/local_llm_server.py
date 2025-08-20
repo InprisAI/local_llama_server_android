@@ -411,18 +411,16 @@ def main():
         default="0.0.0.0",
         help="Host to bind to (default: 0.0.0.0)"
     )
-    # parser.add_argument(
-    #     "--n-ctx", 
-    #     type=int, 
-    #     default=2048,
-    #     help="Context window size (default: 2048)"
-    # )
-    # parser.add_argument(
-    #     "--n-threads", 
-    #     type=int, 
-    #     default=None,
-    #     help="Number of threads (default: auto-detect)"
-    # )
+    parser.add_argument(
+        "-nc""--n-ctx", 
+        type=int, 
+        help="Context window size"
+    )
+    parser.add_argument(
+        "-nt""--n-threads", 
+        type=int, 
+        help="Number of threads"
+    )
     # parser.add_argument(
     #     "--n-gpu-layers", 
     #     type=int, 
