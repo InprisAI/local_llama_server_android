@@ -21,7 +21,7 @@ import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import os
- from fastapi.staticfiles import StaticFiles
+from fastapi.staticfiles import StaticFiles
 
 # Try to import llama-cpp-python
 try:
