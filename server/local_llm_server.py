@@ -25,7 +25,7 @@ from fastapi.staticfiles import StaticFiles
 
 # Try to import llama-cpp-python
 try:
-    from llama_cpp import Llama
+    from llama_cpp import Llama, LlamaRAMCache, GGML_TYPE_Q4_0
 except ImportError:
     print("ERROR: llama-cpp-python is required. Install with:")
     print("pip install llama-cpp-python")
