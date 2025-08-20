@@ -592,11 +592,18 @@
       }
 
       function enqueueSpeech(sentence, sessionId) {
+        console.log('[enqueueSpeech] Queuing sentence:', sentence, 'sessionId:', sessionId, 'current:', currentSpeakSessionId);
         // Chain sentences so they play in order
         speechQueuePromise = speechQueuePromise.then(async () => {
-          if (sessionId !== currentSpeakSessionId) return;
+          if (sessionId !== currentSpeakSessionId) {
+            console.log('[enqueueSpeech] Session mismatch, skipping');
+            return;
+          }
+          console.log('[enqueueSpeech] Speaking:', sentence);
           await tts.speak(sentence);
-        }).catch(() => {});
+        }).catch((err) => {
+          console.error('[enqueueSpeech] Error:', err);
+        });
         return speechQueuePromise;
       }
 
@@ -1063,7 +1070,9 @@
           let speakingStarted = false;
 
           const flushSentences = () => {
+            console.log('[flushSentences] Processing buffer:', speechBuffer);
             const sentences = splitIntoSentences(speechBuffer);
+            console.log('[flushSentences] Split into sentences:', sentences);
             if (sentences.length > 0) {
               const endsWithPunct = /[.!?]["')\]]*\s*$/.test(speechBuffer);
               let toSpeak = sentences;
@@ -1071,11 +1080,14 @@
                 // keep last as partial if no ending punctuation
                 const last = toSpeak.pop();
                 speechBuffer = last || '';
+                console.log('[flushSentences] Keeping partial:', speechBuffer);
               } else {
                 speechBuffer = '';
               }
+              console.log('[flushSentences] Will speak:', toSpeak);
               for (const s of toSpeak) {
                 if (!speakingStarted) {
+                  console.log('[flushSentences] Starting speaking state');
                   hideLoading();
                   animator.setState(AvatarState.Speaking).catch(() => {});
                   speakingStarted = true;
@@ -1090,67 +1102,43 @@
             history: chatHistory,
             signal: currentStreamAbortController.signal,
             onData: ({ type, token, stats }) => {
+              console.log('[Stream] onData:', type, token ? token.substring(0, 20) + '...' : '', stats);
+              
               if (type === 'token' && typeof token === 'string') {
                 fullAssistantText += token;
+                console.log('[Stream] Full text so far:', fullAssistantText.substring(0, 100) + '...');
+                
+                // Simple JSON detection: look for complete JSON at start
                 if (!haveAppliedTheme) {
-                  // Incrementally parse out the first JSON at the beginning
-                  for (let i = 0; i < token.length; i++) {
-                    const ch = token[i];
-                    if (jsonStart === -1) {
-                      if (/\{/.test(ch) && /^\s*$/.test(fullAssistantText.slice(0, -token.length + i))) {
-                        jsonStart = 0;
-                        jsonDepth = 1;
-                        inString = false;
-                        escapeNext = false;
-                        continue;
+                  const jsonMatch = fullAssistantText.match(/^\s*\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/);
+                  if (jsonMatch) {
+                    console.log('[Stream] Found complete JSON:', jsonMatch[0]);
+                    try {
+                      const appliedText = applyTheme(fullAssistantText);
+                      speechBuffer = appliedText || '';
+                      console.log('[Stream] Applied theme, speech buffer:', speechBuffer);
+                      
+                      // Switch to speaking immediately
+                      if (!speakingStarted) {
+                        console.log('[Stream] Switching to Speaking state');
+                        hideLoading();
+                        animator.setState(AvatarState.Speaking).catch(() => {});
+                        speakingStarted = true;
                       }
-                    } else {
-                      if (inString) {
-                        if (escapeNext) {
-                          escapeNext = false;
-                        } else if (ch === '\\') {
-                          escapeNext = true;
-                        } else if (ch === '"') {
-                          inString = false;
-                        }
-                      } else {
-                        if (ch === '"') inString = true;
-                        else if (ch === '{') jsonDepth += 1;
-                        else if (ch === '}') {
-                          jsonDepth -= 1;
-                          if (jsonDepth === 0) {
-                            // JSON likely finished. Apply theme using the joined text
-                            try {
-                              const appliedText = applyTheme(fullAssistantText);
-                              // After applying theme, clear speechBuffer and start with remaining descriptive text
-                              // compute text after json using same logic as applyTheme
-                              const jOpen = fullAssistantText.indexOf('{');
-                              const jClose = fullAssistantText.indexOf('}', jOpen) + 1;
-                              const after = jClose > jOpen ? fullAssistantText.slice(jClose) : '';
-                              speechBuffer += (appliedText && appliedText.trim().length > 0) ? appliedText : after;
-                              // Immediately show speaking state for UX even before first full sentence
-                              if (!speakingStarted) {
-                                hideLoading();
-                                animator.setState(AvatarState.Speaking).catch(() => {});
-                                speakingStarted = true;
-                              }
-                              flushSentences();
-                            } catch (e) {
-                              console.warn('[Stream] applyTheme failed:', e);
-                            }
-                            haveAppliedTheme = true;
-                            // stop parsing JSON further
-                          }
-                        }
-                      }
+                      flushSentences();
+                      haveAppliedTheme = true;
+                    } catch (e) {
+                      console.warn('[Stream] applyTheme failed:', e);
                     }
                   }
                 } else {
-                  // After JSON: stream into speech buffer
+                  // After JSON: accumulate text for speech
+                  console.log('[Stream] Adding token to speech buffer:', token);
                   speechBuffer += token;
                   flushSentences();
                 }
               } else if (type === 'done') {
+                console.log('[Stream] Stream done, final speech buffer:', speechBuffer);
                 if (speechBuffer.trim().length > 0) {
                   if (!speakingStarted) {
                     hideLoading();
