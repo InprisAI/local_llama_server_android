@@ -10,7 +10,7 @@ Usage:
 
 Requirements:
     - llama-cpp-python (pip install llama-cpp-python)
-    - fastapi (pip install fastapi uvicorn)
+    - flask (pip install flask flask-cors)
 """
 
 import argparse
