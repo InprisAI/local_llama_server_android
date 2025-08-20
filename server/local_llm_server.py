@@ -339,6 +339,7 @@ def load_model(model_path: str, capacity_bytes: int = None, **kwargs) -> Llama:
     default_params = {
         "n_ctx": 8192,                # context window
         "n_batch": 2048,              # prompt eval batch size
+        "n_gpu_layers": -1,
     }
     # "type_k": llama_cpp.GGML_TYPE_Q4_0,  
     # "type_v": llama_cpp.GGML_TYPE_Q4_0,  
