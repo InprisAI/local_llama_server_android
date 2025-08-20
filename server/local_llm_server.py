@@ -470,7 +470,15 @@ def main():
         import multiprocessing
         auto_threads = multiprocessing.cpu_count()
         chosen_threads = (auto_threads if args.n_threads == 0 else args.n_threads)
-        chosen_batch = (None if args.n_batch == 0 else args.n_batch)
+        chosen_batch = (args.n_batch if args.n_batch and args.n_batch > 0 else None)
+
+        # Build kwargs without overriding defaults with None
+        model_kwargs = {
+            "verbose": args.verbose,
+            "n_threads": chosen_threads,
+        }
+        if chosen_batch is not None:
+            model_kwargs["n_batch"] = chosen_batch
 
         llm_model = load_model(
             model_path=args.model_path,
@@ -478,9 +486,7 @@ def main():
             enable_cache=not args.disable_cache,
             cache_type=args.cache_type,
             warm_cache=not args.no_warm_cache,
-            verbose=args.verbose,
-            n_threads=chosen_threads,
-            n_batch=chosen_batch if chosen_batch is not None else None
+            **model_kwargs
         )
         logger.info("Server ready to handle requests")
         
