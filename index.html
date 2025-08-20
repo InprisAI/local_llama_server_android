@@ -205,6 +205,7 @@
       let isProcessing = false;
       let currentState = 'Idle';
       let continuousConversation = false;
+      let currentSpeakSessionId = 0;
 
       // Avatar States
       const AvatarState = {
@@ -484,6 +485,45 @@
       }
 
       const tts = new SimpleTTS();
+
+      // Streaming TTS utilities
+      function splitIntoSentences(text) {
+        if (!text) return [];
+        const normalized = String(text).replace(/\s+/g, ' ').trim();
+        if (!normalized) return [];
+        const sentences = [];
+        let buffer = '';
+        for (let i = 0; i < normalized.length; i++) {
+          const ch = normalized[i];
+          buffer += ch;
+          if (/[.!?]/.test(ch)) {
+            // Include trailing quotes/brackets if directly after punctuation
+            let j = i + 1;
+            while (j < normalized.length && /["')\]]/.test(normalized[j])) {
+              buffer += normalized[j];
+              i = j;
+              j += 1;
+            }
+            const sentence = buffer.trim();
+            if (sentence.length) sentences.push(sentence);
+            buffer = '';
+          }
+        }
+        if (buffer.trim().length) sentences.push(buffer.trim());
+        return sentences;
+      }
+
+      async function speakStreamed(text, sessionId) {
+        const parts = splitIntoSentences(text);
+        if (parts.length === 0) return;
+        for (const part of parts) {
+          // Session cancelled (e.g., user tapped to stop)
+          if (sessionId !== currentSpeakSessionId) break;
+          await tts.speak(part);
+          // Tiny natural pause between sentences
+          await new Promise(r => setTimeout(r, 60));
+        }
+      }
 
       // Voice Recognition using Web Speech API
       class SimpleSTT {
@@ -963,7 +1003,8 @@
           // Speak the clean descriptive text (only text outside JSON)
           console.log('[Conversation] About to speak:', cleanTextForTTS);
           if (cleanTextForTTS && cleanTextForTTS.trim().length > 0) {
-            await tts.speak(cleanTextForTTS);
+            const sessionId = ++currentSpeakSessionId;
+            await speakStreamed(cleanTextForTTS, sessionId);
           } else {
             console.log('[Conversation] No text to speak - theme applied silently');
           }
@@ -1071,6 +1112,9 @@
           
           // Stop any ongoing speech recognition
           stt.stopListening();
+          // Stop any ongoing speech
+          tts.stop();
+          currentSpeakSessionId++;
           
           // Provide feedback
           // await tts.speak("Conversation ended. Tap the screen to start again."); // Removed spoken warning
