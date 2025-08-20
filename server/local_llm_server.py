@@ -273,7 +273,7 @@ def load_model(model_path: str, capacity_bytes: int = None, enable_cache: bool =
     
     # Default parameters optimized for mobile/local inference
     default_params = {
-        "n_ctx": 1536,                # context window
+        "n_ctx": 1024,                # context window
         "n_batch": 128,              # prompt eval batch size
         "n_gpu_layers": 0,
     }
@@ -314,7 +314,7 @@ def load_model(model_path: str, capacity_bytes: int = None, enable_cache: bool =
             try:
                 if capacity_bytes is None:
                     # Conservative default suitable for Termux/Android devices
-                    capacity_bytes = 256 * 1024**2  # 256 MiB
+                    capacity_bytes = 512 * 1024**2  # 512 MiB
 
                 if cache_type == "disk":
                     if 'LlamaDiskCache' in globals() and LlamaDiskCache is not None:  # type: ignore
