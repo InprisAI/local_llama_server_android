@@ -305,11 +305,12 @@ def load_model(model_path: str, capacity_bytes: int = None, enable_cache: bool =
     
     logger.info(f"Loading model from: {model_path}")
     
-    # Default parameters optimized for mobile/local inference
+    # Default parameters optimized for aggressive on-device performance
     default_params = {
         "n_ctx": 1024,                # context window
-        "n_batch": 128,              # prompt eval batch size
+        "n_batch": 512,              # larger prompt eval batch for faster prefix eval
         "n_gpu_layers": 0,
+        "use_mmap": True,
     }
     # "type_k": llama_cpp.GGML_TYPE_Q4_0,  
     # "type_v": llama_cpp.GGML_TYPE_Q4_0,  
@@ -336,6 +337,10 @@ def load_model(model_path: str, capacity_bytes: int = None, enable_cache: bool =
     })
     
     logger.info(f"Model parameters: {params}")
+    if params.get("n_threads"):
+        logger.info(f"Using {params['n_threads']} CPU threads")
+    if params.get("n_batch"):
+        logger.info(f"Using n_batch={params['n_batch']} for prompt eval")
     
     try:
         start_time = time.time()
@@ -347,8 +352,8 @@ def load_model(model_path: str, capacity_bytes: int = None, enable_cache: bool =
         if enable_cache:
             try:
                 if capacity_bytes is None:
-                    # Default to 1 GiB; adjust with -cb if needed
-                    capacity_bytes = 1024 * 1024**2  # 1 GiB
+                    # Default to 2 GiB; adjust with -cb if needed
+                    capacity_bytes = 2 * 1024 * 1024**2  # 2 GiB
 
                 if cache_type == "disk":
                     if 'LlamaDiskCache' in globals() and LlamaDiskCache is not None:  # type: ignore
@@ -440,6 +445,12 @@ def main():
         help="Number of CPU threads to use (0 = auto/all cores)"
     )
     parser.add_argument(
+        "--n-batch",
+        type=int,
+        default=0,
+        help="Prompt eval batch size (0 = use default aggressive setting)"
+    )
+    parser.add_argument(
         "--max-history-turns",
         type=int,
         default=0,
@@ -455,6 +466,12 @@ def main():
     # Load model
     global llm_model
     try:
+        # Compute dynamic parameters
+        import multiprocessing
+        auto_threads = multiprocessing.cpu_count()
+        chosen_threads = (auto_threads if args.n_threads == 0 else args.n_threads)
+        chosen_batch = (None if args.n_batch == 0 else args.n_batch)
+
         llm_model = load_model(
             model_path=args.model_path,
             capacity_bytes=args.capacity_bytes,
@@ -462,7 +479,8 @@ def main():
             cache_type=args.cache_type,
             warm_cache=not args.no_warm_cache,
             verbose=args.verbose,
-            n_threads=(None if args.n_threads == 0 else args.n_threads)
+            n_threads=chosen_threads,
+            n_batch=chosen_batch if chosen_batch is not None else None
         )
         logger.info("Server ready to handle requests")
         
