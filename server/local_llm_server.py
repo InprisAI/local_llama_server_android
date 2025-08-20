@@ -17,17 +17,13 @@ import argparse
 import logging
 import time
 from typing import List, Optional
-import uvicorn
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
 import os
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
-
+from flask import Flask, request, jsonify, send_from_directory
+from flask_cors import CORS
 
 # Try to import llama-cpp-python
 try:
-    from llama_cpp import Llama, LlamaRAMCache
+    from llama_cpp import Llama
 except ImportError:
     print("ERROR: llama-cpp-python is required. Install with:")
     print("pip install llama-cpp-python")
@@ -57,60 +53,32 @@ class GenerateRequest:
         self.top_p = top_p
         self.stop = stop
 
-class GenerateResponse:
-    def __init__(self, response: str, processing_time: float):
-        self.response = response
-        self.processing_time = processing_time
-
-class ServerStatus:
-    def __init__(self, status: str, model_loaded: bool, 
-                 model_path: Optional[str] = None, context_size: Optional[int] = None,
-                 memory_usage_mb: Optional[float] = None):
-        self.status = status
-        self.model_loaded = model_loaded
-        self.model_path = model_path
-        self.context_size = context_size
-        self.memory_usage_mb = memory_usage_mb
-
-
 # Global model instance
 llm_model: Optional[Llama] = None
 model_config = {}
 
-# FastAPI app
-app = FastAPI(
-    title="Local GGUF LLM Server",
-    description="Simple HTTP API for local GGUF model inference",
-    version="1.0.0"
-)
+# Flask app
+app = Flask(__name__)
 
 # Paths for static serving (serve UI from the same server)
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
-PUBLIC_DIR = os.path.join(BASE_DIR, "public")
 INDEX_HTML = os.path.join(BASE_DIR, "index.html")
 
-# Mount static directories if they exist
-if os.path.isdir(STATIC_DIR):
-    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-if os.path.isdir(PUBLIC_DIR):
-    app.mount("/public", StaticFiles(directory=PUBLIC_DIR), name="public")
-
 # Serve index.html at root
-@app.get("/")
-async def serve_index():
+@app.route("/")
+def serve_index():
     if os.path.isfile(INDEX_HTML):
-        return FileResponse(INDEX_HTML)
-    return {"status": "ui_not_found", "detail": INDEX_HTML}
+        return send_from_directory(BASE_DIR, "index.html")
+    return jsonify({"status": "ui_not_found", "detail": INDEX_HTML}), 404
+
+# Serve static files
+@app.route('/static/<path:path>')
+def serve_static(path):
+    return send_from_directory(STATIC_DIR, path)
 
 # CORS middleware for browser access
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # In production, specify exact origins
-    allow_credentials=True,
-    allow_methods=["GET", "POST"],
-    allow_headers=["*"],
-)
+CORS(app)
 
 def format_chat_history(history: List[ChatMessage]) -> str:
     """Format chat history into a prompt string."""
@@ -210,16 +178,16 @@ Assistant:
     
     return prompt
 
-@app.get("/health")
-async def health_check():
+@app.route("/health")
+def health_check():
     """Health check endpoint."""
-    return {
+    return jsonify({
         "status": "healthy" if llm_model is not None else "model_not_loaded",
         "timestamp": time.time()
-    }
+    })
 
-@app.get("/status")
-async def get_status():
+@app.route("/status")
+def get_status():
     """Get detailed server status."""
     memory_usage = None
     try:
@@ -229,29 +197,27 @@ async def get_status():
     except ImportError:
         pass
     
-    status_obj = ServerStatus(
-        status="ready" if llm_model is not None else "model_not_loaded",
-        model_loaded=llm_model is not None,
-        model_path=model_config.get("model_path"),
-        context_size=model_config.get("n_ctx"),
-        memory_usage_mb=memory_usage
-    )
-    return {
-        "status": status_obj.status,
-        "model_loaded": status_obj.model_loaded,
-        "model_path": status_obj.model_path,
-        "context_size": status_obj.context_size,
-        "memory_usage_mb": status_obj.memory_usage_mb
+    status_obj = {
+        "status": "ready" if llm_model is not None else "model_not_loaded",
+        "model_loaded": llm_model is not None,
+        "model_path": model_config.get("model_path"),
+        "context_size": model_config.get("n_ctx"),
+        "memory_usage_mb": memory_usage
     }
+    return jsonify(status_obj)
 
-@app.post("/generate")
-async def generate_response(request_data: dict):
+@app.route("/generate", methods=["POST"])
+def generate_response():
     """Generate a response using the local GGUF model."""
     if llm_model is None:
-        raise HTTPException(status_code=503, detail="Model not loaded")
+        return jsonify({"detail": "Model not loaded"}), 503
     
-    # Parse request data
+    # Parse request data from JSON body
     try:
+        request_data = request.get_json()
+        if not request_data:
+            return jsonify({"detail": "Invalid JSON"}), 400
+            
         message = request_data.get("message", "")
         history_data = request_data.get("history", [])
         max_tokens = request_data.get("max_tokens", 200)
@@ -260,73 +226,46 @@ async def generate_response(request_data: dict):
         stop = request_data.get("stop")
         
         # Convert history data to ChatMessage objects
-        history = []
-        for msg_data in history_data:
-            if isinstance(msg_data, dict):
-                history.append(ChatMessage(msg_data.get("role", ""), msg_data.get("content", "")))
-            elif hasattr(msg_data, "role") and hasattr(msg_data, "content"):
-                history.append(msg_data)
+        history = [ChatMessage(msg.get("role", ""), msg.get("content", "")) for msg in history_data]
         
-        request = GenerateRequest(message, history, max_tokens, temperature, top_p, stop)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Invalid request data: {str(e)}")
+        return jsonify({"detail": f"Invalid request data: {str(e)}"}), 400
     
     start_time = time.time()
     
     try:
         # Create prompt
-        prompt = create_prompt(request.message, request.history)
-        logger.info(f"Generating response for: {request.message[:100]}...")
+        prompt = create_prompt(message, history)
+        logger.info(f"Generating response for: {message[:100]}...")
         
-        # Generate response with streaming to measure performance
-        stream = llm_model(
+        # Generate response
+        response = llm_model(
             prompt,
-            max_tokens=request.max_tokens,
-            temperature=request.temperature,
-            top_p=request.top_p,
-            stop=request.stop or ["User:", "\nUser:", "Human:", "\n\n"],
-            echo=False,
-            stream=True
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            stop=stop or ["User:", "\nUser:", "Human:", "\n\n"],
+            echo=False
         )
         
-        response_text = ""
-        first_token_time = None
-        token_count = 0
-        
-        for output in stream:
-            if first_token_time is None:
-                first_token_time = time.time()
-                ttft = first_token_time - start_time
-                logger.info(f"Time to first token: {ttft:.2f}s")
-
-            token = output['choices'][0]['text']
-            response_text += token
-            token_count += 1
-        
-        processing_time = time.time() - start_time
-        
-        # Log performance metrics
-        if processing_time > 0 and token_count > 0:
-            tokens_per_sec = token_count / processing_time
-            logger.info(
-                f"Inference completed: {token_count} tokens in {processing_time:.2f}s "
-                f"({tokens_per_sec:.2f} tokens/sec)"
-            )
+        # Extract response text
+        response_text = response['choices'][0]['text'].strip()
         
         # Clean up common artifacts
         if response_text.startswith("Assistant:"):
             response_text = response_text[10:].strip()
         
-        logger.info(f"Full response: {response_text[:100]}...")
+        processing_time = time.time() - start_time
+        logger.info(f"Response generated in {processing_time:.2f}s: {response_text[:100]}...")
         
-        return {
+        return jsonify({
             "response": response_text,
             "processing_time": processing_time
-        }
+        })
         
     except Exception as e:
         logger.error(f"Error generating response: {e}")
-        raise HTTPException(status_code=500, detail=f"Generation failed: {str(e)}")
+        return jsonify({"detail": f"Generation failed: {str(e)}"}), 500
 
 def load_model(model_path: str, capacity_bytes: int = None, **kwargs) -> Llama:
     """Load the GGUF model."""
@@ -374,7 +313,7 @@ def load_model(model_path: str, capacity_bytes: int = None, **kwargs) -> Llama:
         if not capacity_bytes:
             capacity_bytes = 4 * 1024**3  # ~4 GiB
 
-        model.set_cache(LlamaRAMCache(capacity_bytes=capacity_bytes))  # Commented out - undefined  
+        # model.set_cache(LlamaRAMCache(capacity_bytes=capacity_bytes))  # Commented out - undefined  
 
         # …or on-disk cache (persists across runs; slower than RAM but big)
         # model.set_cache(LlamaDiskCache(capacity_bytes=20 * 1024**3))  # ~20 GiB
@@ -411,24 +350,6 @@ def main():
         default="0.0.0.0",
         help="Host to bind to (default: 0.0.0.0)"
     )
-    # parser.add_argument(
-    #     "--n-ctx", 
-    #     type=int, 
-    #     default=2048,
-    #     help="Context window size (default: 2048)"
-    # )
-    # parser.add_argument(
-    #     "--n-threads", 
-    #     type=int, 
-    #     default=None,
-    #     help="Number of threads (default: auto-detect)"
-    # )
-    # parser.add_argument(
-    #     "--n-gpu-layers", 
-    #     type=int, 
-    #     default=0,
-    #     help="Number of GPU layers (default: 0 for CPU-only)"
-    # )
     parser.add_argument(
         "--verbose", 
         action="store_true",
@@ -457,14 +378,11 @@ def main():
     
     # Run server
     logger.info(f"Starting server on {args.host}:{args.port}")
-    uvicorn.run(
-        app, 
+    app.run(
         host=args.host, 
         port=args.port,
-        log_level="info" if not args.verbose else "debug"
+        debug=args.verbose
     )
-
-
 
 if __name__ == "__main__":
     main()
