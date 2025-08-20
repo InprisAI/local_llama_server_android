@@ -64,6 +64,10 @@ class GenerateRequest:
 llm_model: Optional[Llama] = None
 model_config = {}
 
+# Track last prompt tokens to estimate cache prefix reuse across requests
+last_prompt_tokens: List[int] = []
+last_cached_prefix_len: int = 0
+
 # Paths for static serving (serve UI from the same server)
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
@@ -215,6 +219,12 @@ def generate_response():
         
         # Convert history data to ChatMessage objects
         history = [ChatMessage(msg.get("role", ""), msg.get("content", "")) for msg in history_data]
+
+        # Limit history to keep TTFT low while still hitting the prompt cache.
+        # Keep only the last N turns (configurable via CLI).
+        max_history_turns = int(model_config.get("max_history_turns", 2))
+        if max_history_turns > 0 and len(history) > max_history_turns:
+            history = history[-max_history_turns:]
         
     except Exception as e:
         return jsonify({"detail": f"Invalid request data: {str(e)}"}), 400
@@ -224,6 +234,30 @@ def generate_response():
     try:
         # Create prompt
         prompt = create_prompt(message, history)
+
+        # Log prompt token count to correlate with TTFT and estimate cache reuse
+        try:
+            prompt_tokens = llm_model.tokenize(prompt.encode("utf-8"))
+            # Estimate shared prefix with previous prompt to infer cache hit extent
+            global last_prompt_tokens
+            global last_cached_prefix_len
+            shared = 0
+            max_shared = min(len(last_prompt_tokens), len(prompt_tokens))
+            while shared < max_shared and last_prompt_tokens[shared] == prompt_tokens[shared]:
+                shared += 1
+            new_tokens = len(prompt_tokens) - shared
+            logger.info(f"Prompt tokens: {len(prompt_tokens)} (cached prefix ~{shared}, new {new_tokens})")
+            # Warn if cached prefix shrinks notably; may indicate cache capacity too small
+            if model_config.get("enable_cache", False) and shared + 16 < last_cached_prefix_len:
+                logger.warning(
+                    "Cached prefix decreased from %d to %d tokens; consider increasing cache capacity (-cb)",
+                    last_cached_prefix_len,
+                    shared,
+                )
+            last_cached_prefix_len = shared
+            last_prompt_tokens = prompt_tokens
+        except Exception:
+            pass
         logger.info(f"Generating response for: {message[:100]}...")
         
         # Generate response with streaming to capture timing metrics
@@ -264,7 +298,7 @@ def generate_response():
         logger.error(f"Error generating response: {e}")
         return jsonify({"detail": f"Generation failed: {str(e)}"}), 500
 
-def load_model(model_path: str, capacity_bytes: int = None, enable_cache: bool = True, cache_type: str = "ram", warm_cache: bool = False, **kwargs) -> Llama:
+def load_model(model_path: str, capacity_bytes: int = None, enable_cache: bool = True, cache_type: str = "ram", warm_cache: bool = True, **kwargs) -> Llama:
     """Load the GGUF model."""
     if not os.path.exists(model_path):
         raise FileNotFoundError(f"Model file not found: {model_path}")
@@ -313,8 +347,8 @@ def load_model(model_path: str, capacity_bytes: int = None, enable_cache: bool =
         if enable_cache:
             try:
                 if capacity_bytes is None:
-                    # Conservative default suitable for Termux/Android devices
-                    capacity_bytes = 512 * 1024**2  # 512 MiB
+                    # Default to 1 GiB; adjust with -cb if needed
+                    capacity_bytes = 1024 * 1024**2  # 1 GiB
 
                 if cache_type == "disk":
                     if 'LlamaDiskCache' in globals() and LlamaDiskCache is not None:  # type: ignore
@@ -395,9 +429,21 @@ def main():
         help="Prompt cache type: 'ram' or 'disk' (default: ram)"
     )
     parser.add_argument(
-        "--warm-cache",
+        "--no-warm-cache",
         action="store_true",
-        help="Warm the cache at startup with the system prompt"
+        help="Disable warming the cache at startup (enabled by default)"
+    )
+    parser.add_argument(
+        "--n-threads",
+        type=int,
+        default=0,
+        help="Number of CPU threads to use (0 = auto/all cores)"
+    )
+    parser.add_argument(
+        "--max-history-turns",
+        type=int,
+        default=0,
+        help="Limit the number of prior messages kept in the prompt (0 = keep all; default: 0)"
     )
     
     args = parser.parse_args()
@@ -414,8 +460,9 @@ def main():
             capacity_bytes=args.capacity_bytes,
             enable_cache=not args.disable_cache,
             cache_type=args.cache_type,
-            warm_cache=args.warm_cache,
-            verbose=args.verbose
+            warm_cache=not args.no_warm_cache,
+            verbose=args.verbose,
+            n_threads=(None if args.n_threads == 0 else args.n_threads)
         )
         logger.info("Server ready to handle requests")
         
@@ -426,6 +473,9 @@ def main():
     # Reduce werkzeug request logging unless verbose
     if not args.verbose:
         logging.getLogger('werkzeug').setLevel(logging.ERROR)
+
+    # Store runtime config for request handlers
+    model_config["max_history_turns"] = args.max_history_turns
 
     # Run server
     logger.info(f"Starting server on {args.host}:{args.port}")
