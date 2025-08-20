@@ -288,8 +288,8 @@ def load_model(model_path: str, capacity_bytes: int = None, **kwargs) -> Llama:
     
     # Default parameters optimized for mobile/local inference
     default_params = {
-        "n_ctx": 8192,                # context window
-        "n_batch": 2048,              # prompt eval batch size
+        "n_ctx": 1024,                # context window
+        "n_batch": 128,              # prompt eval batch size
         "n_gpu_layers": 0,
     }
     # "type_k": llama_cpp.GGML_TYPE_Q4_0,  
