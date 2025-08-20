@@ -27,7 +27,7 @@ from fastapi.responses import FileResponse
 
 # Try to import llama-cpp-python
 try:
-    from llama_cpp import Llama, LlamaRAMCache, GGML_TYPE_Q4_0
+    from llama_cpp import Llama, LlamaRAMCache
 except ImportError:
     print("ERROR: llama-cpp-python is required. Install with:")
     print("pip install llama-cpp-python")
