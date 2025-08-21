@@ -194,6 +194,34 @@
         defaultMasks: {
           abt1: 'NEW MASKS ABT/Core_L.png',
           abt2: 'NEW MASKS ABT/Core_R.png'
+        },
+        tts: {
+          // Desktop TTS settings (better quality for Chrome desktop)
+          desktop: {
+            preferOnlineVoices: true,
+            rate: 0.95,
+            pitch: 1.1,
+            volume: 0.9,
+            voice: 'US English Female' // ResponsiveVoice voice name
+          },
+          // Mobile/Android TTS settings (optimized for device performance)
+          mobile: {
+            preferLocalVoices: true,
+            rate: 0.9,
+            pitch: 1.0,
+            volume: 0.8
+          },
+          // Premium TTS services (optional)
+          services: {
+            responsiveVoice: {
+              enabled: true,
+              apiKey: 'FREE_API_KEY' // Replace with your API key for better limits
+            },
+            googleCloud: {
+              enabled: false,
+              apiKey: '' // Add your Google Cloud TTS API key here
+            }
+          }
         }
       };
 
@@ -491,14 +519,111 @@
 
       const llmClient = new LocalLLMClient(CONFIG.localServerUrl);
 
-      // TTS using Web Speech API
-      class SimpleTTS {
+      // Enhanced TTS System with platform-specific optimizations
+      class EnhancedTTS {
         constructor() {
+          this.isAndroid = /Android/i.test(navigator.userAgent);
+          this.isDesktopChrome = !this.isAndroid && /Chrome/i.test(navigator.userAgent) && !/Mobile|Tablet/i.test(navigator.userAgent);
+          
           this.synth = window.speechSynthesis;
           this.voice = null;
+          this.premiumEngine = null;
+          
+          console.log('[TTS] Platform detection:', { 
+            isAndroid: this.isAndroid, 
+            isDesktopChrome: this.isDesktopChrome,
+            userAgent: navigator.userAgent 
+          });
+          
+          this.initializeTTS();
+        }
+
+        async initializeTTS() {
+          if (this.isDesktopChrome) {
+            console.log('[TTS] Initializing enhanced desktop TTS...');
+            await this.initDesktopTTS();
+          } else {
+            console.log('[TTS] Using device TTS...');
+            this.initDeviceTTS();
+          }
+        }
+
+        async initDesktopTTS() {
+          // Try to initialize premium TTS engines for desktop
+          await this.tryGoogleCloudTTS();
+          await this.tryResponsiveVoiceAPI();
+          
+          // Fallback to enhanced Web Speech API
           this.loadVoices();
           
           // Ensure voices are loaded (sometimes they load asynchronously)
+          if (this.synth.onvoiceschanged !== undefined) {
+            this.synth.onvoiceschanged = () => this.loadVoices();
+          }
+        }
+
+        async tryGoogleCloudTTS() {
+          // Note: This would require API key - placeholder for future enhancement
+          console.log('[TTS] Google Cloud TTS not configured (requires API key)');
+          return false;
+        }
+
+        async tryResponsiveVoiceAPI() {
+          // Skip if disabled in config
+          if (!CONFIG.tts.services.responsiveVoice.enabled) {
+            console.log('[TTS] ResponsiveVoice disabled in config');
+            return false;
+          }
+          
+          // Try ResponsiveVoice (free tier available)
+          if (window.responsiveVoice) {
+            console.log('[TTS] ResponsiveVoice API detected');
+            this.premiumEngine = 'responsivevoice';
+            return true;
+          }
+          
+          // Try to load ResponsiveVoice dynamically
+          try {
+            await this.loadResponsiveVoice();
+            if (window.responsiveVoice) {
+              console.log('[TTS] ResponsiveVoice API loaded successfully');
+              this.premiumEngine = 'responsivevoice';
+              return true;
+            }
+          } catch (error) {
+            console.log('[TTS] ResponsiveVoice loading failed:', error);
+          }
+          
+          return false;
+        }
+
+        loadResponsiveVoice() {
+          return new Promise((resolve, reject) => {
+            if (window.responsiveVoice) {
+              resolve();
+              return;
+            }
+
+            const script = document.createElement('script');
+            script.src = `https://code.responsivevoice.org/responsivevoice.js?key=${CONFIG.tts.services.responsiveVoice.apiKey}`;
+            script.onload = () => {
+              // Wait a bit for ResponsiveVoice to initialize
+              setTimeout(() => {
+                if (window.responsiveVoice) {
+                  resolve();
+                } else {
+                  reject(new Error('ResponsiveVoice failed to initialize'));
+                }
+              }, 1000);
+            };
+            script.onerror = reject;
+            document.head.appendChild(script);
+          });
+        }
+
+        initDeviceTTS() {
+          this.loadVoices();
+          
           if (this.synth.onvoiceschanged !== undefined) {
             this.synth.onvoiceschanged = () => this.loadVoices();
           }
@@ -508,61 +633,138 @@
           const voices = this.synth.getVoices();
           console.log('[TTS] Available voices:', voices.map(v => `${v.name} (${v.lang})${v.localService ? ' [local]' : ''}`));
 
-          // Prefer English voices; prioritize local/offline voices if present
+          // Enhanced voice selection for desktop vs mobile
           const englishVoices = voices.filter(voice => 
             (voice.lang || '').startsWith('en')
           );
-          const localEnglish = englishVoices.filter(v => v.localService === true);
-          const preferred = localEnglish.length ? localEnglish : englishVoices;
-
-          this.voice = 
-            preferred.find(v => v.lang === 'en-US' && v.name && v.name.includes('Female')) ||
-            preferred.find(v => v.lang === 'en-US' && v.name && v.name.includes('Male')) ||
-            preferred.find(v => v.lang === 'en-US') ||
-            preferred.find(v => v.lang === 'en-GB') ||
-            preferred.find(v => (v.lang || '').startsWith('en')) ||
-            voices[0];
+          
+          if (this.isDesktopChrome) {
+            // Desktop: Prefer high-quality online voices if configured
+            const onlineEnglish = englishVoices.filter(v => v.localService === false);
+            const localEnglish = englishVoices.filter(v => v.localService === true);
+            const preferred = (CONFIG.tts.desktop.preferOnlineVoices && onlineEnglish.length) ? onlineEnglish : localEnglish;
+            
+            this.voice = 
+              // Prefer Google voices (usually better quality)
+              preferred.find(v => v.name && v.name.includes('Google') && v.name.includes('Female')) ||
+              preferred.find(v => v.name && v.name.includes('Google') && v.name.includes('Male')) ||
+              preferred.find(v => v.name && v.name.includes('Google')) ||
+              // Then natural-sounding voices
+              preferred.find(v => v.name && (v.name.includes('Natural') || v.name.includes('Neural'))) ||
+              // Standard desktop voices
+              preferred.find(v => v.lang === 'en-US' && v.name && v.name.includes('Female')) ||
+              preferred.find(v => v.lang === 'en-US' && v.name && v.name.includes('Male')) ||
+              preferred.find(v => v.lang === 'en-US') ||
+              preferred.find(v => v.lang === 'en-GB') ||
+              preferred.find(v => (v.lang || '').startsWith('en')) ||
+              voices[0];
+          } else {
+            // Mobile/Android: Prefer local voices for better performance if configured
+            const localEnglish = englishVoices.filter(v => v.localService === true);
+            const onlineEnglish = englishVoices.filter(v => v.localService === false);
+            const preferred = (CONFIG.tts.mobile.preferLocalVoices && localEnglish.length) ? localEnglish : englishVoices;
+            
+            this.voice = 
+              preferred.find(v => v.lang === 'en-US' && v.name && v.name.includes('Female')) ||
+              preferred.find(v => v.lang === 'en-US' && v.name && v.name.includes('Male')) ||
+              preferred.find(v => v.lang === 'en-US') ||
+              preferred.find(v => v.lang === 'en-GB') ||
+              preferred.find(v => (v.lang || '').startsWith('en')) ||
+              voices[0];
+          }
             
           if (this.voice) {
-            console.log('[TTS] Selected voice:', this.voice.name, '(' + this.voice.lang + ')', this.voice.localService ? '[local]' : '');
+            console.log('[TTS] Selected voice:', this.voice.name, '(' + this.voice.lang + ')', this.voice.localService ? '[local]' : '[online]');
           }
         }
 
-        speak(text) {
-          return new Promise((resolve) => {
-            if (!text.trim()) {
-              resolve();
-              return;
-            }
+        async speak(text) {
+          if (!text.trim()) {
+            return Promise.resolve();
+          }
 
+          // Use premium engine for desktop if available
+          if (this.isDesktopChrome && this.premiumEngine === 'responsivevoice') {
+            return this.speakWithResponsiveVoice(text);
+          }
+          
+          // Use Web Speech API (enhanced for desktop, standard for mobile)
+          return this.speakWithWebSpeechAPI(text);
+        }
+
+        speakWithResponsiveVoice(text) {
+          return new Promise((resolve) => {
+            console.log('[TTS] Speaking with ResponsiveVoice:', text.substring(0, 50) + '...');
+            
+            const settings = CONFIG.tts.desktop;
+            
+            try {
+              window.responsiveVoice.speak(text, settings.voice, {
+                rate: settings.rate,
+                pitch: settings.pitch,
+                volume: settings.volume,
+                onend: () => {
+                  console.log('[TTS] ResponsiveVoice finished');
+                  resolve();
+                },
+                onerror: (error) => {
+                  console.warn('[TTS] ResponsiveVoice error:', error);
+                  // Fallback to Web Speech API
+                  this.speakWithWebSpeechAPI(text).then(resolve);
+                }
+              });
+            } catch (error) {
+              console.warn('[TTS] ResponsiveVoice exception:', error);
+              // Fallback to Web Speech API
+              this.speakWithWebSpeechAPI(text).then(resolve);
+            }
+          });
+        }
+
+        speakWithWebSpeechAPI(text) {
+          return new Promise((resolve) => {
             const utterance = new SpeechSynthesisUtterance(text);
             
             // Force English voice selection
             if (this.voice) {
               utterance.voice = this.voice;
             }
-            utterance.lang = 'en-US'; // Explicitly set language
-            utterance.rate = 0.9;
-            utterance.pitch = 1.0;
-            utterance.volume = 0.8;
+            utterance.lang = 'en-US';
+            
+            // Platform-specific settings from config
+            const settings = this.isDesktopChrome ? CONFIG.tts.desktop : CONFIG.tts.mobile;
+            utterance.rate = settings.rate;
+            utterance.pitch = settings.pitch;
+            utterance.volume = settings.volume;
 
             utterance.onend = resolve;
             utterance.onerror = (error) => {
-              console.warn('[TTS] Error:', error);
+              console.warn('[TTS] Web Speech API error:', error);
               resolve();
             };
 
-            console.log('[TTS] Speaking:', text.substring(0, 50) + '...');
+            console.log('[TTS] Speaking with Web Speech API:', text.substring(0, 50) + '...');
             this.synth.speak(utterance);
           });
         }
 
         stop() {
-          this.synth.cancel();
+          // Stop all TTS engines
+          if (this.premiumEngine === 'responsivevoice' && window.responsiveVoice) {
+            try {
+              window.responsiveVoice.cancel();
+            } catch (e) {
+              console.warn('[TTS] Error stopping ResponsiveVoice:', e);
+            }
+          }
+          
+          if (this.synth) {
+            this.synth.cancel();
+          }
         }
       }
 
-      const tts = new SimpleTTS();
+      const tts = new EnhancedTTS();
 
       // Streaming TTS utilities
       function splitIntoSentences(text) {
@@ -1421,3 +1623,4 @@
   </script>
 </body>
 </html>
+
