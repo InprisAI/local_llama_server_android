@@ -579,6 +579,67 @@
         return sentences;
       }
 
+      // Split into chunks of N words, but flush early on punctuation (comma, period, exclamation, question)
+      function splitIntoChunksByWordsOrPunctuation(text, groupSize = 3) {
+        if (!text) return [];
+        const normalized = String(text).replace(/\s+/g, ' ').trim();
+        if (!normalized) return [];
+
+        const chunks = [];
+        let buffer = '';
+        let wordCount = 0;
+        let inWord = false;
+
+        const isWordChar = (c) => /[A-Za-z0-9]/.test(c);
+
+        for (let i = 0; i < normalized.length; i++) {
+          const ch = normalized[i];
+          buffer += ch;
+
+          // Detect punctuation-triggered flush
+          if (/[.,!?]/.test(ch)) {
+            // Include trailing quotes/brackets if directly after punctuation
+            let j = i + 1;
+            while (j < normalized.length && /["')\]]/.test(normalized[j])) {
+              buffer += normalized[j];
+              i = j;
+              j += 1;
+            }
+            const out = buffer.trim();
+            if (out.length) chunks.push(out);
+            buffer = '';
+            wordCount = 0;
+            inWord = false;
+            continue;
+          }
+
+          // Track word boundaries
+          const wasInWord = inWord;
+          inWord = isWordChar(ch);
+          // Transition from word to non-word increments word count
+          if (wasInWord && !isWordChar(ch)) {
+            wordCount += 1;
+          }
+
+          // If we reached group size and we're at whitespace, flush a chunk
+          if (wordCount >= groupSize && /\s/.test(ch)) {
+            const out = buffer.trim();
+            if (out.length) chunks.push(out);
+            buffer = '';
+            wordCount = 0;
+            inWord = false;
+          }
+        }
+
+        // If ended while still in a word, count it
+        if (inWord) {
+          wordCount += 1;
+        }
+
+        if (buffer.trim().length) chunks.push(buffer.trim());
+        return chunks;
+      }
+
       async function speakStreamed(text, sessionId) {
         const parts = splitIntoSentences(text);
         if (parts.length === 0) return;
@@ -1071,11 +1132,11 @@
 
           const flushSentences = () => {
             console.log('[flushSentences] Processing buffer:', speechBuffer);
-            const sentences = splitIntoSentences(speechBuffer);
-            console.log('[flushSentences] Split into sentences:', sentences);
-            if (sentences.length > 0) {
-              const endsWithPunct = /[.!?]["')\]]*\s*$/.test(speechBuffer);
-              let toSpeak = sentences;
+            const chunks = splitIntoChunksByWordsOrPunctuation(speechBuffer, 3);
+            console.log('[flushSentences] Split into chunks:', chunks);
+            if (chunks.length > 0) {
+              const endsWithPunct = /[.,!?]["')\]]*\s*$/.test(speechBuffer);
+              let toSpeak = chunks;
               if (!endsWithPunct) {
                 // keep last as partial if no ending punctuation
                 const last = toSpeak.pop();
