@@ -579,35 +579,38 @@
         return sentences;
       }
 
-      // Split into chunks of N words, but flush early on punctuation (comma, period, exclamation, question)
-      function splitIntoChunksByWordsOrPunctuation(text, groupSize = 3) {
-        if (!text) return [];
+      // Extract chunks from text since the LAST CUT, returning chunks and the remaining partial buffer.
+      // Rules:
+      // - Flush on punctuation [.,!?] immediately (includes trailing quotes/brackets)
+      // - Otherwise flush when reaching `groupSize` words at a whitespace boundary
+      // - Return remaining partial text after the last cut as `remainder` (used as the next speechBuffer)
+      function extractChunksWithRemainder(text, groupSize = 3) {
+        if (!text) return { chunks: [], remainder: '' };
         const normalized = String(text).replace(/\s+/g, ' ').trim();
-        if (!normalized) return [];
+        if (!normalized) return { chunks: [], remainder: '' };
 
         const chunks = [];
-        let buffer = '';
+        let segment = '';
         let wordCount = 0;
         let inWord = false;
-
         const isWordChar = (c) => /[A-Za-z0-9]/.test(c);
 
         for (let i = 0; i < normalized.length; i++) {
           const ch = normalized[i];
-          buffer += ch;
+          segment += ch;
 
-          // Detect punctuation-triggered flush
+          // Punctuation-triggered flush
           if (/[.,!?]/.test(ch)) {
             // Include trailing quotes/brackets if directly after punctuation
             let j = i + 1;
             while (j < normalized.length && /["')\]]/.test(normalized[j])) {
-              buffer += normalized[j];
+              segment += normalized[j];
               i = j;
               j += 1;
             }
-            const out = buffer.trim();
+            const out = segment.trim();
             if (out.length) chunks.push(out);
-            buffer = '';
+            segment = '';
             wordCount = 0;
             inWord = false;
             continue;
@@ -616,28 +619,26 @@
           // Track word boundaries
           const wasInWord = inWord;
           inWord = isWordChar(ch);
-          // Transition from word to non-word increments word count
           if (wasInWord && !isWordChar(ch)) {
-            wordCount += 1;
+            wordCount += 1; // completed a word
           }
 
-          // If we reached group size and we're at whitespace, flush a chunk
+          // Reached group size at a whitespace boundary → cut
           if (wordCount >= groupSize && /\s/.test(ch)) {
-            const out = buffer.trim();
+            const out = segment.trim();
             if (out.length) chunks.push(out);
-            buffer = '';
+            segment = '';
             wordCount = 0;
             inWord = false;
           }
         }
 
-        // If ended while still in a word, count it
+        // If string ends in a word, count it (but do not force flush)
         if (inWord) {
           wordCount += 1;
         }
 
-        if (buffer.trim().length) chunks.push(buffer.trim());
-        return chunks;
+        return { chunks, remainder: segment.trim() };
       }
 
       async function speakStreamed(text, sessionId) {
@@ -1132,21 +1133,13 @@
 
           const flushSentences = () => {
             console.log('[flushSentences] Processing buffer:', speechBuffer);
-            const chunks = splitIntoChunksByWordsOrPunctuation(speechBuffer, 5);
-            console.log('[flushSentences] Split into chunks:', chunks);
+            const { chunks, remainder } = extractChunksWithRemainder(speechBuffer, 4);
+            console.log('[flushSentences] Chunks:', chunks, 'Remainder:', remainder);
             if (chunks.length > 0) {
-              const endsWithPunct = /[.,!?]["')\]]*\s*$/.test(speechBuffer);
-              let toSpeak = chunks;
-              if (!endsWithPunct) {
-                // keep last as partial if no ending punctuation
-                const last = toSpeak.pop();
-                speechBuffer = last || '';
-                console.log('[flushSentences] Keeping partial:', speechBuffer);
-              } else {
-                speechBuffer = '';
-              }
-              console.log('[flushSentences] Will speak:', toSpeak);
-              for (const s of toSpeak) {
+              // After speaking, keep only remainder as the new buffer (start counting from last cut)
+              speechBuffer = remainder;
+              console.log('[flushSentences] Updated buffer to remainder:', speechBuffer);
+              for (const s of chunks) {
                 if (!speakingStarted) {
                   console.log('[flushSentences] Starting speaking state');
                   hideLoading();
