@@ -1132,7 +1132,7 @@
 
           const flushSentences = () => {
             console.log('[flushSentences] Processing buffer:', speechBuffer);
-            const chunks = splitIntoChunksByWordsOrPunctuation(speechBuffer, 1);
+            const chunks = splitIntoChunksByWordsOrPunctuation(speechBuffer, 5);
             console.log('[flushSentences] Split into chunks:', chunks);
             if (chunks.length > 0) {
               const endsWithPunct = /[.,!?]["')\]]*\s*$/.test(speechBuffer);
