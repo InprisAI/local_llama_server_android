@@ -184,7 +184,7 @@
       
       // Configuration
       const CONFIG = {
-        localServerUrl: 'http://localhost:8080', // Local GGUF server
+        localServerUrl: (window.location && window.location.origin) ? window.location.origin : 'http://127.0.0.1:8080',
         avatarBasePath: '/static/media_cupra/CUPRA_AVATAR',
         masksBasePath: '/static/media_cupra/masks',
         defaultMasks: {
@@ -374,18 +374,22 @@
 
         async checkConnection() {
           try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 3000);
             const response = await fetch(`${this.baseUrl}/health`, {
               method: 'GET',
-              timeout: 5000
+              signal: controller.signal
             });
+            clearTimeout(timeoutId);
             return response.ok;
-          } catch (error) {
-            console.error('[Local LLM] Connection check failed:', error);
+          } catch (_error) {
             return false;
           }
         }
 
         async generateResponse(message, history = []) {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 15000);
           try {
             const response = await fetch(`${this.baseUrl}/generate`, {
               method: 'POST',
@@ -394,9 +398,9 @@
               },
               body: JSON.stringify({
                 message: message,
-                history: history.slice(-3) // Keep last 3 messages for context
-                // Use server's optimized defaults: max_tokens=200, temperature=0.4, top_p=0.9
-              })
+                history: history.slice(-3)
+              }),
+              signal: controller.signal
             });
 
             if (!response.ok) {
@@ -405,18 +409,22 @@
 
             const data = await response.json();
             return data.response || data.text || 'Sorry, I received an empty response.';
-          } catch (error) {
-            console.error('[Local LLM] Generation failed:', error);
-            throw error;
+          } finally {
+            clearTimeout(timeoutId);
           }
         }
 
         async generateStream({ message, history = [], signal, onData }) {
+          const controller = new AbortController();
+          if (signal) {
+            signal.addEventListener('abort', () => controller.abort(), { once: true });
+          }
+          const timeoutId = setTimeout(() => controller.abort(), 20000);
           const response = await fetch(`${this.baseUrl}/generate_stream`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ message, history: history.slice(-3) }),
-            signal
+            signal: controller.signal
           });
           if (!response.ok || !response.body) {
             throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -472,6 +480,7 @@
             }
           }
 
+          clearTimeout(timeoutId);
           return fullText;
         }
       }
@@ -493,26 +502,25 @@
 
         loadVoices() {
           const voices = this.synth.getVoices();
-          console.log('[TTS] Available voices:', voices.map(v => `${v.name} (${v.lang})`));
-          
-          // Prefer English voices in order of preference
+          console.log('[TTS] Available voices:', voices.map(v => `${v.name} (${v.lang})${v.localService ? ' [local]' : ''}`));
+
+          // Prefer English voices; prioritize local/offline voices if present
           const englishVoices = voices.filter(voice => 
-            voice.lang.startsWith('en-US') || 
-            voice.lang.startsWith('en-GB') || 
-            voice.lang.startsWith('en')
+            (voice.lang || '').startsWith('en')
           );
-          
-          // Try to find the best English voice
+          const localEnglish = englishVoices.filter(v => v.localService === true);
+          const preferred = localEnglish.length ? localEnglish : englishVoices;
+
           this.voice = 
-            englishVoices.find(v => v.lang === 'en-US' && v.name.includes('Female')) ||
-            englishVoices.find(v => v.lang === 'en-US' && v.name.includes('Male')) ||
-            englishVoices.find(v => v.lang === 'en-US') ||
-            englishVoices.find(v => v.lang === 'en-GB') ||
-            englishVoices.find(v => v.lang.startsWith('en')) ||
+            preferred.find(v => v.lang === 'en-US' && v.name && v.name.includes('Female')) ||
+            preferred.find(v => v.lang === 'en-US' && v.name && v.name.includes('Male')) ||
+            preferred.find(v => v.lang === 'en-US') ||
+            preferred.find(v => v.lang === 'en-GB') ||
+            preferred.find(v => (v.lang || '').startsWith('en')) ||
             voices[0];
             
           if (this.voice) {
-            console.log('[TTS] Selected voice:', this.voice.name, '(' + this.voice.lang + ')');
+            console.log('[TTS] Selected voice:', this.voice.name, '(' + this.voice.lang + ')', this.voice.localService ? '[local]' : '');
           }
         }
 
@@ -685,8 +693,9 @@
 
           const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
           this.recognition = new SpeechRecognition();
-          this.recognition.continuous = false;
-          this.recognition.interimResults = false;
+          // Keep listening through short pauses and accumulate results
+          this.recognition.continuous = true;
+          this.recognition.interimResults = true;
           this.recognition.lang = 'en-US'; // Explicitly set to US English
           this.recognition.maxAlternatives = 1;
           
@@ -701,11 +710,19 @@
             }
 
             this.isListening = true;
-            
+            let finalTranscript = '';
+            let interimTranscript = '';
+
             this.recognition.onresult = (event) => {
-              const result = event.results[0][0].transcript;
-              this.isListening = false;
-              resolve(result);
+              for (let i = event.resultIndex; i < event.results.length; i++) {
+                const res = event.results[i];
+                const text = (res[0] && res[0].transcript) ? res[0].transcript : '';
+                if (res.isFinal) {
+                  finalTranscript += text + ' ';
+                } else {
+                  interimTranscript = text;
+                }
+              }
             };
 
             this.recognition.onerror = (event) => {
@@ -713,8 +730,15 @@
               reject(new Error(`Speech recognition error: ${event.error}`));
             };
 
+            // Stop recognition when speech ends to finalize results
+            this.recognition.onspeechend = () => {
+              try { this.recognition.stop(); } catch (_) {}
+            };
+
             this.recognition.onend = () => {
               this.isListening = false;
+              const transcript = (finalTranscript || interimTranscript || '').trim();
+              resolve(transcript);
             };
 
             this.recognition.start();
@@ -949,19 +973,19 @@
           const cleaned = stripBrackets(soundName);
           let src = cleaned;
           
-          // Map to /public assets unless absolute
-          if (!/^https?:\/\//i.test(src) && !src.startsWith('/')) {
-            src = `/public/${src}`;
+          // Block remote audio; require local static assets
+          if (/^https?:\/\//i.test(src)) {
+            console.warn('[Theme] Remote audio URL blocked:', src);
+            return;
+          }
+          if (!src.startsWith('/')) {
+            src = `/static/${src}`;
           }
           
           const audio = new Audio(src);
-          audio.crossOrigin = 'anonymous';
+          // Avoid cross-origin to prevent network usage
           audio.onerror = () => {
-            // Fallback to bundled sound if requested file missing
-            console.warn(`[Theme] Sound effect ${src} not found, using fallback`);
-            audio.onerror = null;
-            audio.src = '/public/hi.mp3';
-            audio.play().catch(() => {});
+            console.warn(`[Theme] Sound effect not found: ${src}`);
           };
           audio.play().catch(() => {});
           console.log(`[Theme] Playing sound effect: ${src}`);
@@ -1365,6 +1389,14 @@
         stageEl.addEventListener('click', handleStageTap);
         stageEl.addEventListener('touchstart', handleStageTap, { passive: true });
       }
+
+      // Reflect online/offline status without altering flows
+      window.addEventListener('online', () => {
+        updateStatus('connected', 'Ready');
+      });
+      window.addEventListener('offline', () => {
+        updateStatus('disconnected', 'Offline');
+      });
 
       // Initialize
       console.log('[CUPRA Local] Initialization complete');
