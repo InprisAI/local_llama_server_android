@@ -1133,7 +1133,7 @@
 
           const flushSentences = () => {
             console.log('[flushSentences] Processing buffer:', speechBuffer);
-            const { chunks, remainder } = extractChunksWithRemainder(speechBuffer, 4);
+            const { chunks, remainder } = extractChunksWithRemainder(speechBuffer, 10);
             console.log('[flushSentences] Chunks:', chunks, 'Remainder:', remainder);
             if (chunks.length > 0) {
               // After speaking, keep only remainder as the new buffer (start counting from last cut)
