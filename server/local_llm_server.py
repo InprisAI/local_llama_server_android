@@ -22,6 +22,15 @@ from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from flask import Response, stream_with_context
 import json
+import wave
+import io
+from typing import Any
+
+# Optional Vosk for offline STT
+try:
+    import vosk  # type: ignore
+except Exception:
+    vosk = None  # type: ignore
 
 # Try to import llama-cpp-python
 try:
@@ -64,6 +73,7 @@ class GenerateRequest:
 
 # Global model instance
 llm_model: Optional[Llama] = None
+vosk_model: Any = None
 model_config = {}
 
 # Track last prompt tokens to estimate cache prefix reuse across requests
@@ -118,9 +128,9 @@ Conversation flow (strict):
 1) Greeting: If no prior conversation, greet and briefly explain you create ambience themes (lighting + display background + vibe). If there is prior context, acknowledge and continue.
 2) Preference gathering (no JSON yet): Ask one short question at a time to identify mood, color preference (warm/cool or specific), and any imagery. If unclear, ask for clarification; e.g., if the user says "like harry poter", ask which house (Gryffindor, Slytherin, Ravenclaw, Hufflepuff) and what atmosphere they want.
 3) Theme generation (only after preferences are clear):
-   - Output a single JSON object on the first line exactly as below after the prefix CUPRA_AI:
-    CUPRA_AI: {"background":"<Background>","color1":"<Color>","color2":"<Color>"} <Friendly sentence describing the vibe>
-   - Then add one short friendly sentence describing the vibe. Avoid file names.
+   - Output a single JSON object on the first line exactly as:
+     {"background":"<Background>","color1":"<Color>","color2":"<Color>"}
+   - Then add one short friendly sentence describing the vibe. Avoid technical file names.
    - Use names only from the lists below, exactly as written.
 4) Presentation & confirmation: After JSON + sentence, ask for confirmation. Do not output another JSON unless the user requests changes or declines. If uncertain, ask one clarifying question.
 5) Off‑topic: Reply briefly and steer back to ambience creation.
@@ -154,11 +164,11 @@ Constraints:
 <Example>
 User: Hi
 
-CUPRA_AI: Hi! I help you create a custom ambience with a display background and lighting colors. What mood would you like—relaxing, energetic, focused, night drive, nature or anything else you have in mind?
+Assistant: Hi! I help you create a custom ambience with a display background and lighting colors. What mood would you like—relaxing, energetic, focused, night drive, nature or anything else you have in mind?
 
 User: Energetic in red
 
-CUPRA_AI: {"background":"Performance","color1":"Red","color2":"Black"} Energetic sports mood with bold contrast. How does it look?
+Assistant: {"background":"Performance","color1":"Red","color2":"Black"} Energetic sports mood with bold contrast.
 </Example>
 """
     
@@ -172,6 +182,52 @@ CUPRA_AI: {"background":"Performance","color1":"Red","color2":"Black"} Energetic
         prompt = f"{system_prompt}User: {message}\nCUPRA_AI:"
     
     return prompt
+
+def _read_wav_mono_16k(raw_bytes: bytes) -> bytes:
+    """Validate and return PCM16 mono 16kHz WAV data payload (excluding header)."""
+    with wave.open(io.BytesIO(raw_bytes), 'rb') as wf:
+        nchannels = wf.getnchannels()
+        sampwidth = wf.getsampwidth()
+        framerate = wf.getframerate()
+        if nchannels != 1 or sampwidth != 2 or framerate != 16000:
+            raise ValueError(f"Expected WAV mono=1, pcm16=2 bytes, 16kHz. Got channels={nchannels}, width={sampwidth}, rate={framerate}")
+        frames = wf.readframes(wf.getnframes())
+        return frames
+
+@app.route("/stt", methods=["POST"])
+def offline_stt():
+    """Offline STT using Vosk. Accepts audio/wav mono 16k PCM16 in body or multipart file 'audio'."""
+    if vosk_model is None:
+        return jsonify({"detail": "STT model not loaded"}), 503
+
+    # Read raw WAV bytes
+    raw: bytes
+    if request.files and 'audio' in request.files:
+        raw = request.files['audio'].read()
+    else:
+        raw = request.data or b''
+    if not raw:
+        return jsonify({"detail": "No audio provided"}), 400
+
+    try:
+        pcm = _read_wav_mono_16k(raw)
+    except Exception as e:
+        return jsonify({"detail": f"Invalid WAV: {e}"}), 400
+
+    try:
+        rec = vosk.KaldiRecognizer(vosk_model, 16000)  # type: ignore
+        rec.SetWords(True)
+        # Feed in chunks
+        chunk_size = 4000
+        for i in range(0, len(pcm), chunk_size):
+            rec.AcceptWaveform(pcm[i:i+chunk_size])
+        result_json = rec.Result()
+        obj = json.loads(result_json)
+        text = (obj.get('text') or '').strip()
+        return jsonify({"text": text, "raw": obj})
+    except Exception as e:
+        logger.error(f"STT failed: {e}")
+        return jsonify({"detail": f"STT failed: {e}"}), 500
 
 @app.route("/health")
 def health_check():
@@ -197,7 +253,8 @@ def get_status():
         "model_loaded": llm_model is not None,
         "model_path": model_config.get("model_path"),
         "context_size": model_config.get("n_ctx"),
-        "memory_usage_mb": memory_usage
+        "memory_usage_mb": memory_usage,
+        "stt_offline": bool(vosk_model is not None)
     }
     return jsonify(status_obj)
 
@@ -531,6 +588,11 @@ def main():
         default=0,
         help="Limit the number of prior messages kept in the prompt (0 = keep all; default: 0)"
     )
+    parser.add_argument(
+        "--stt-model-dir",
+        type=str,
+        help="Path to Vosk model directory for offline STT (optional)"
+    )
     
     args = parser.parse_args()
     
@@ -540,6 +602,7 @@ def main():
     
     # Load model
     global llm_model
+    global vosk_model
     try:
         # Compute dynamic parameters
         import multiprocessing
@@ -564,6 +627,21 @@ def main():
             **model_kwargs
         )
         logger.info("Server ready to handle requests")
+
+        # Load Vosk STT model if provided
+        if args.stt_model_dir:
+            if vosk is None:
+                logger.error("Vosk not installed but --stt-model-dir provided. Install 'vosk' first.")
+            else:
+                if not os.path.isdir(args.stt_model_dir):
+                    logger.error(f"Vosk model directory not found: {args.stt_model_dir}")
+                else:
+                    try:
+                        logger.info(f"Loading Vosk model from: {args.stt_model_dir}")
+                        vosk_model = vosk.Model(args.stt_model_dir)  # type: ignore
+                        logger.info("Vosk model loaded successfully")
+                    except Exception as stt_err:
+                        logger.error(f"Failed to load Vosk model: {stt_err}")
         
     except Exception as e:
         logger.error(f"Failed to initialize model: {e}")

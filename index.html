@@ -194,34 +194,6 @@
         defaultMasks: {
           abt1: 'NEW MASKS ABT/Core_L.png',
           abt2: 'NEW MASKS ABT/Core_R.png'
-        },
-        tts: {
-          // Desktop TTS settings (better quality for Chrome desktop)
-          desktop: {
-            preferOnlineVoices: true,
-            rate: 0.95,
-            pitch: 1.1,
-            volume: 0.9,
-            voice: 'US English Female' // ResponsiveVoice voice name
-          },
-          // Mobile/Android TTS settings (optimized for device performance)
-          mobile: {
-            preferLocalVoices: true,
-            rate: 0.9,
-            pitch: 1.0,
-            volume: 0.8
-          },
-          // Premium TTS services (optional)
-          services: {
-            responsiveVoice: {
-              enabled: true,
-              apiKey: 'FREE_API_KEY' // Replace with your API key for better limits
-            },
-            googleCloud: {
-              enabled: false,
-              apiKey: '' // Add your Google Cloud TTS API key here
-            }
-          }
         }
       };
 
@@ -519,111 +491,14 @@
 
       const llmClient = new LocalLLMClient(CONFIG.localServerUrl);
 
-      // Enhanced TTS System with platform-specific optimizations
-      class EnhancedTTS {
+      // TTS using Web Speech API
+      class SimpleTTS {
         constructor() {
-          this.isAndroid = /Android/i.test(navigator.userAgent);
-          this.isDesktopChrome = !this.isAndroid && /Chrome/i.test(navigator.userAgent) && !/Mobile|Tablet/i.test(navigator.userAgent);
-          
           this.synth = window.speechSynthesis;
           this.voice = null;
-          this.premiumEngine = null;
-          
-          console.log('[TTS] Platform detection:', { 
-            isAndroid: this.isAndroid, 
-            isDesktopChrome: this.isDesktopChrome,
-            userAgent: navigator.userAgent 
-          });
-          
-          this.initializeTTS();
-        }
-
-        async initializeTTS() {
-          if (this.isDesktopChrome) {
-            console.log('[TTS] Initializing enhanced desktop TTS...');
-            await this.initDesktopTTS();
-          } else {
-            console.log('[TTS] Using device TTS...');
-            this.initDeviceTTS();
-          }
-        }
-
-        async initDesktopTTS() {
-          // Try to initialize premium TTS engines for desktop
-          await this.tryGoogleCloudTTS();
-          await this.tryResponsiveVoiceAPI();
-          
-          // Fallback to enhanced Web Speech API
           this.loadVoices();
           
           // Ensure voices are loaded (sometimes they load asynchronously)
-          if (this.synth.onvoiceschanged !== undefined) {
-            this.synth.onvoiceschanged = () => this.loadVoices();
-          }
-        }
-
-        async tryGoogleCloudTTS() {
-          // Note: This would require API key - placeholder for future enhancement
-          console.log('[TTS] Google Cloud TTS not configured (requires API key)');
-          return false;
-        }
-
-        async tryResponsiveVoiceAPI() {
-          // Skip if disabled in config
-          if (!CONFIG.tts.services.responsiveVoice.enabled) {
-            console.log('[TTS] ResponsiveVoice disabled in config');
-            return false;
-          }
-          
-          // Try ResponsiveVoice (free tier available)
-          if (window.responsiveVoice) {
-            console.log('[TTS] ResponsiveVoice API detected');
-            this.premiumEngine = 'responsivevoice';
-            return true;
-          }
-          
-          // Try to load ResponsiveVoice dynamically
-          try {
-            await this.loadResponsiveVoice();
-            if (window.responsiveVoice) {
-              console.log('[TTS] ResponsiveVoice API loaded successfully');
-              this.premiumEngine = 'responsivevoice';
-              return true;
-            }
-          } catch (error) {
-            console.log('[TTS] ResponsiveVoice loading failed:', error);
-          }
-          
-          return false;
-        }
-
-        loadResponsiveVoice() {
-          return new Promise((resolve, reject) => {
-            if (window.responsiveVoice) {
-              resolve();
-              return;
-            }
-
-            const script = document.createElement('script');
-            script.src = `https://code.responsivevoice.org/responsivevoice.js?key=${CONFIG.tts.services.responsiveVoice.apiKey}`;
-            script.onload = () => {
-              // Wait a bit for ResponsiveVoice to initialize
-              setTimeout(() => {
-                if (window.responsiveVoice) {
-                  resolve();
-                } else {
-                  reject(new Error('ResponsiveVoice failed to initialize'));
-                }
-              }, 1000);
-            };
-            script.onerror = reject;
-            document.head.appendChild(script);
-          });
-        }
-
-        initDeviceTTS() {
-          this.loadVoices();
-          
           if (this.synth.onvoiceschanged !== undefined) {
             this.synth.onvoiceschanged = () => this.loadVoices();
           }
@@ -633,138 +508,61 @@
           const voices = this.synth.getVoices();
           console.log('[TTS] Available voices:', voices.map(v => `${v.name} (${v.lang})${v.localService ? ' [local]' : ''}`));
 
-          // Enhanced voice selection for desktop vs mobile
+          // Prefer English voices; prioritize local/offline voices if present
           const englishVoices = voices.filter(voice => 
             (voice.lang || '').startsWith('en')
           );
-          
-          if (this.isDesktopChrome) {
-            // Desktop: Prefer high-quality online voices if configured
-            const onlineEnglish = englishVoices.filter(v => v.localService === false);
-            const localEnglish = englishVoices.filter(v => v.localService === true);
-            const preferred = (CONFIG.tts.desktop.preferOnlineVoices && onlineEnglish.length) ? onlineEnglish : localEnglish;
-            
-            this.voice = 
-              // Prefer Google voices (usually better quality)
-              preferred.find(v => v.name && v.name.includes('Google') && v.name.includes('Female')) ||
-              preferred.find(v => v.name && v.name.includes('Google') && v.name.includes('Male')) ||
-              preferred.find(v => v.name && v.name.includes('Google')) ||
-              // Then natural-sounding voices
-              preferred.find(v => v.name && (v.name.includes('Natural') || v.name.includes('Neural'))) ||
-              // Standard desktop voices
-              preferred.find(v => v.lang === 'en-US' && v.name && v.name.includes('Female')) ||
-              preferred.find(v => v.lang === 'en-US' && v.name && v.name.includes('Male')) ||
-              preferred.find(v => v.lang === 'en-US') ||
-              preferred.find(v => v.lang === 'en-GB') ||
-              preferred.find(v => (v.lang || '').startsWith('en')) ||
-              voices[0];
-          } else {
-            // Mobile/Android: Prefer local voices for better performance if configured
-            const localEnglish = englishVoices.filter(v => v.localService === true);
-            const onlineEnglish = englishVoices.filter(v => v.localService === false);
-            const preferred = (CONFIG.tts.mobile.preferLocalVoices && localEnglish.length) ? localEnglish : englishVoices;
-            
-            this.voice = 
-              preferred.find(v => v.lang === 'en-US' && v.name && v.name.includes('Female')) ||
-              preferred.find(v => v.lang === 'en-US' && v.name && v.name.includes('Male')) ||
-              preferred.find(v => v.lang === 'en-US') ||
-              preferred.find(v => v.lang === 'en-GB') ||
-              preferred.find(v => (v.lang || '').startsWith('en')) ||
-              voices[0];
-          }
+          const localEnglish = englishVoices.filter(v => v.localService === true);
+          const preferred = localEnglish.length ? localEnglish : englishVoices;
+
+          this.voice = 
+            preferred.find(v => v.lang === 'en-US' && v.name && v.name.includes('Female')) ||
+            preferred.find(v => v.lang === 'en-US' && v.name && v.name.includes('Male')) ||
+            preferred.find(v => v.lang === 'en-US') ||
+            preferred.find(v => v.lang === 'en-GB') ||
+            preferred.find(v => (v.lang || '').startsWith('en')) ||
+            voices[0];
             
           if (this.voice) {
-            console.log('[TTS] Selected voice:', this.voice.name, '(' + this.voice.lang + ')', this.voice.localService ? '[local]' : '[online]');
+            console.log('[TTS] Selected voice:', this.voice.name, '(' + this.voice.lang + ')', this.voice.localService ? '[local]' : '');
           }
         }
 
-        async speak(text) {
-          if (!text.trim()) {
-            return Promise.resolve();
-          }
-
-          // Use premium engine for desktop if available
-          if (this.isDesktopChrome && this.premiumEngine === 'responsivevoice') {
-            return this.speakWithResponsiveVoice(text);
-          }
-          
-          // Use Web Speech API (enhanced for desktop, standard for mobile)
-          return this.speakWithWebSpeechAPI(text);
-        }
-
-        speakWithResponsiveVoice(text) {
+        speak(text) {
           return new Promise((resolve) => {
-            console.log('[TTS] Speaking with ResponsiveVoice:', text.substring(0, 50) + '...');
-            
-            const settings = CONFIG.tts.desktop;
-            
-            try {
-              window.responsiveVoice.speak(text, settings.voice, {
-                rate: settings.rate,
-                pitch: settings.pitch,
-                volume: settings.volume,
-                onend: () => {
-                  console.log('[TTS] ResponsiveVoice finished');
-                  resolve();
-                },
-                onerror: (error) => {
-                  console.warn('[TTS] ResponsiveVoice error:', error);
-                  // Fallback to Web Speech API
-                  this.speakWithWebSpeechAPI(text).then(resolve);
-                }
-              });
-            } catch (error) {
-              console.warn('[TTS] ResponsiveVoice exception:', error);
-              // Fallback to Web Speech API
-              this.speakWithWebSpeechAPI(text).then(resolve);
+            if (!text.trim()) {
+              resolve();
+              return;
             }
-          });
-        }
 
-        speakWithWebSpeechAPI(text) {
-          return new Promise((resolve) => {
             const utterance = new SpeechSynthesisUtterance(text);
             
             // Force English voice selection
             if (this.voice) {
               utterance.voice = this.voice;
             }
-            utterance.lang = 'en-US';
-            
-            // Platform-specific settings from config
-            const settings = this.isDesktopChrome ? CONFIG.tts.desktop : CONFIG.tts.mobile;
-            utterance.rate = settings.rate;
-            utterance.pitch = settings.pitch;
-            utterance.volume = settings.volume;
+            utterance.lang = 'en-US'; // Explicitly set language
+            utterance.rate = 0.9;
+            utterance.pitch = 1.0;
+            utterance.volume = 0.8;
 
             utterance.onend = resolve;
             utterance.onerror = (error) => {
-              console.warn('[TTS] Web Speech API error:', error);
+              console.warn('[TTS] Error:', error);
               resolve();
             };
 
-            console.log('[TTS] Speaking with Web Speech API:', text.substring(0, 50) + '...');
+            console.log('[TTS] Speaking:', text.substring(0, 50) + '...');
             this.synth.speak(utterance);
           });
         }
 
         stop() {
-          // Stop all TTS engines
-          if (this.premiumEngine === 'responsivevoice' && window.responsiveVoice) {
-            try {
-              window.responsiveVoice.cancel();
-            } catch (e) {
-              console.warn('[TTS] Error stopping ResponsiveVoice:', e);
-            }
-          }
-          
-          if (this.synth) {
-            this.synth.cancel();
-          }
+          this.synth.cancel();
         }
       }
 
-      const tts = new EnhancedTTS();
+      const tts = new SimpleTTS();
 
       // Streaming TTS utilities
       function splitIntoSentences(text) {
@@ -888,6 +686,17 @@
         constructor() {
           this.recognition = null;
           this.isListening = false;
+          this.baseUrl = (window.location && window.location.origin) ? window.location.origin : 'http://127.0.0.1:8080';
+          this.mediaStream = null;
+          this.audioContext = null;
+          this.processor = null;
+          this.sourceNode = null;
+          this._silenceInterval = null;
+          this._webSpeechSilenceMs = 1200;
+          this._webSpeechHardLimitMs = 10000;
+          this._offlineActive = false;
+          this._sttStatusTs = 0;
+          this._sttAvailable = null;
           this.initRecognition();
         }
 
@@ -909,15 +718,36 @@
         }
 
         startListening() {
-          return new Promise((resolve, reject) => {
+          return new Promise(async (resolve) => {
+            // Default: try offline STT first when available
+            const sttOk = await this.checkSttAvailable().catch(() => false);
+            if (sttOk) {
+              try {
+                this.isListening = true;
+                const offlineText = await this.startOfflineSTT();
+                if (offlineText && offlineText.trim()) {
+                  this.isListening = false;
+                  resolve(offlineText.trim());
+                  return;
+                }
+              } catch (_) {
+                // ignore and fall back to Web Speech
+              }
+            }
+
+            // Fallback to Web Speech if available
             if (!this.recognition) {
-              reject(new Error('Speech recognition not available'));
+              this.isListening = false;
+              resolve('');
               return;
             }
 
             this.isListening = true;
             let finalTranscript = '';
             let interimTranscript = '';
+            let gotSpeech = false;
+            const startAt = performance.now();
+            let lastSpeechAt = startAt;
 
             this.recognition.onresult = (event) => {
               for (let i = event.resultIndex; i < event.results.length; i++) {
@@ -925,15 +755,18 @@
                 const text = (res[0] && res[0].transcript) ? res[0].transcript : '';
                 if (res.isFinal) {
                   finalTranscript += text + ' ';
+                  if (text.trim().length) { gotSpeech = true; lastSpeechAt = performance.now(); }
                 } else {
                   interimTranscript = text;
+                  if (text.trim().length) { gotSpeech = true; lastSpeechAt = performance.now(); }
                 }
               }
             };
 
-            this.recognition.onerror = (event) => {
+            this.recognition.onerror = (_event) => {
               this.isListening = false;
-              reject(new Error(`Speech recognition error: ${event.error}`));
+              if (this._silenceInterval) { clearInterval(this._silenceInterval); this._silenceInterval = null; }
+              resolve('');
             };
 
             // Stop recognition when speech ends to finalize results
@@ -943,19 +776,205 @@
 
             this.recognition.onend = () => {
               this.isListening = false;
+              if (this._silenceInterval) { clearInterval(this._silenceInterval); this._silenceInterval = null; }
               const transcript = (finalTranscript || interimTranscript || '').trim();
               resolve(transcript);
             };
 
             this.recognition.start();
+
+            // Monitor silence and hard limit; proactively stop recognition
+            if (this._silenceInterval) { clearInterval(this._silenceInterval); }
+            this._silenceInterval = setInterval(() => {
+              const now = performance.now();
+              const hardElapsed = now - startAt;
+              const silenceElapsed = now - lastSpeechAt;
+              if (hardElapsed >= this._webSpeechHardLimitMs) {
+                try { this.recognition.stop(); } catch (_) {}
+              } else if (gotSpeech && silenceElapsed >= this._webSpeechSilenceMs) {
+                try { this.recognition.stop(); } catch (_) {}
+              }
+            }, 100);
           });
         }
 
-        stopListening() {
-          if (this.recognition && this.isListening) {
-            this.recognition.stop();
-            this.isListening = false;
+        async checkSttAvailable() {
+          const now = Date.now();
+          const TTL = 5000; // cache 5s
+          if (this._sttAvailable !== null && (now - this._sttStatusTs) < TTL) {
+            return this._sttAvailable;
           }
+          const controller = new AbortController();
+          const tid = setTimeout(() => controller.abort(), 1200);
+          try {
+            const resp = await fetch(`${this.baseUrl}/status`, { signal: controller.signal });
+            clearTimeout(tid);
+            if (!resp.ok) { this._sttAvailable = false; this._sttStatusTs = now; return false; }
+            const data = await resp.json().catch(() => ({}));
+            const ok = !!(data && data.stt_offline === true);
+            this._sttAvailable = ok; this._sttStatusTs = now; return ok;
+          } catch (_e) {
+            clearTimeout(tid);
+            this._sttAvailable = false; this._sttStatusTs = now; return false;
+          }
+        }
+
+        stopListening() {
+          // Stop Web Speech
+          try {
+            if (this.recognition && this.isListening) {
+              this.recognition.stop();
+            }
+          } catch (_) {}
+          this.isListening = false;
+          if (this._silenceInterval) { clearInterval(this._silenceInterval); this._silenceInterval = null; }
+          // Stop offline recorder if active
+          this.stopOfflineRecording();
+        }
+
+        // Offline STT using local /stt endpoint. Records PCM, encodes WAV mono 16k, posts to server
+        async startOfflineSTT() {
+          // Capture mic
+          const stream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+              channelCount: 1,
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true
+            }
+          });
+          this.mediaStream = stream;
+
+          const AudioCtx = window.AudioContext || window.webkitAudioContext;
+          this.audioContext = new AudioCtx();
+          const inputSampleRate = this.audioContext.sampleRate;
+          this.sourceNode = this.audioContext.createMediaStreamSource(stream);
+          const bufferSize = 4096;
+          this.processor = this.audioContext.createScriptProcessor(bufferSize, 1, 1);
+
+          const chunks = [];
+          let gotSpeech = false;
+          let lastVoiceTs = performance.now();
+          const silenceMsToStop = 1200;
+          const hardLimitMs = 10000;
+          const startTs = performance.now();
+          this._offlineActive = true;
+
+          this.processor.onaudioprocess = (e) => {
+            if (!this._offlineActive) return;
+            const input = e.inputBuffer.getChannelData(0);
+            // Simple VAD: RMS
+            let rms = 0;
+            for (let i = 0; i < input.length; i++) { const s = input[i]; rms += s*s; }
+            rms = Math.sqrt(rms / input.length);
+            if (rms > 0.015) { gotSpeech = true; lastVoiceTs = performance.now(); }
+            chunks.push(new Float32Array(input));
+
+            const now = performance.now();
+            const silenceFor = now - lastVoiceTs;
+            const elapsed = now - startTs;
+            if ((gotSpeech && silenceFor >= silenceMsToStop) || elapsed >= hardLimitMs) {
+              this.stopOfflineRecording();
+            }
+          };
+
+          this.sourceNode.connect(this.processor);
+          this.processor.connect(this.audioContext.destination);
+
+          // Wait until processor is torn down
+          await new Promise((resolve) => setTimeout(resolve, 10));
+          // Poll until recording stops
+          await new Promise((resolve) => {
+            const check = () => {
+              if (!this._offlineActive || !this.processor || !this.audioContext) { resolve(); return; }
+              setTimeout(check, 100);
+            };
+            check();
+          });
+
+          // Concatenate float32 samples
+          let totalLength = 0;
+          for (const c of chunks) totalLength += c.length;
+          const recorded = new Float32Array(totalLength);
+          let offset = 0;
+          for (const c of chunks) { recorded.set(c, offset); offset += c.length; }
+
+          // Resample to 16k and encode WAV PCM16
+          const resampled = this.resampleLinear(recorded, inputSampleRate, 16000);
+          const wav = this.encodeWavPCM16(resampled, 16000);
+
+          // POST to local STT endpoint
+          const resp = await fetch(`${this.baseUrl}/stt`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'audio/wav' },
+            body: wav
+          });
+          if (!resp.ok) return '';
+          const data = await resp.json().catch(() => ({}));
+          return (data && (data.text || '').trim()) || '';
+        }
+
+        stopOfflineRecording() {
+          if (!this._offlineActive) return;
+          this._offlineActive = false;
+          try { if (this.sourceNode) this.sourceNode.disconnect(); } catch (_) {}
+          try { if (this.processor) this.processor.disconnect(); } catch (_) {}
+          try { if (this.audioContext) this.audioContext.close(); } catch (_) {}
+          this.sourceNode = null; this.processor = null; this.audioContext = null;
+          if (this.mediaStream) {
+            for (const track of this.mediaStream.getTracks()) { try { track.stop(); } catch (_) {} }
+          }
+          this.mediaStream = null;
+        }
+
+        resampleLinear(input, inRate, outRate) {
+          if (inRate === outRate) return input;
+          const ratio = outRate / inRate;
+          const outLength = Math.max(1, Math.round(input.length * ratio));
+          const output = new Float32Array(outLength);
+          for (let i = 0; i < outLength; i++) {
+            const srcPos = i / ratio;
+            const i0 = Math.floor(srcPos);
+            const i1 = Math.min(i0 + 1, input.length - 1);
+            const t = srcPos - i0;
+            output[i] = (1 - t) * input[i0] + t * input[i1];
+          }
+          return output;
+        }
+
+        encodeWavPCM16(samples, sampleRate) {
+          // Convert Float32 [-1,1] to Int16
+          const pcm = new Int16Array(samples.length);
+          for (let i = 0; i < samples.length; i++) {
+            let s = Math.max(-1, Math.min(1, samples[i]));
+            pcm[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+          }
+          const byteRate = sampleRate * 2;
+          const blockAlign = 2;
+          const buffer = new ArrayBuffer(44 + pcm.byteLength);
+          const view = new DataView(buffer);
+          // RIFF header
+          this._writeStr(view, 0, 'RIFF');
+          view.setUint32(4, 36 + pcm.byteLength, true);
+          this._writeStr(view, 8, 'WAVE');
+          this._writeStr(view, 12, 'fmt ');
+          view.setUint32(16, 16, true); // PCM chunk size
+          view.setUint16(20, 1, true);  // PCM format
+          view.setUint16(22, 1, true);  // mono
+          view.setUint32(24, sampleRate, true);
+          view.setUint32(28, byteRate, true);
+          view.setUint16(32, blockAlign, true);
+          view.setUint16(34, 16, true); // bits per sample
+          this._writeStr(view, 36, 'data');
+          view.setUint32(40, pcm.byteLength, true);
+          // PCM
+          const pcmBytes = new Uint8Array(buffer, 44);
+          pcmBytes.set(new Uint8Array(pcm.buffer));
+          return buffer;
+        }
+
+        _writeStr(view, offset, str) {
+          for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
         }
       }
 
@@ -1505,7 +1524,14 @@
           console.log('[Voice] Calling stt.startListening()...');
           const userMessage = await stt.startListening();
           console.log('[Voice] Recognized:', userMessage);
-          
+          // Skip empty transcripts; return UI to idle
+          if (!userMessage || !String(userMessage).trim()) {
+            hideLoading();
+            animator.setState(AvatarState.Idle).catch(() => {});
+            updateStatus('connected', 'Ready');
+            return;
+          }
+
           console.log('[Voice] Calling handleConversation with:', userMessage);
           await handleConversation(userMessage);
           
@@ -1623,4 +1649,3 @@
   </script>
 </body>
 </html>
-
